@@ -1,0 +1,668 @@
+/* ============================================================================
+   GENERAL LAYOUT
+   ============================================================================ */
+
+* {
+  margin: 0;
+  padding: 0;
+  box-sizing: border-box;
+}
+
+body {
+  font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+  background: linear-gradient(135deg, #1e1e2e 0%, #2a2a3e 100%);
+  color: #e0e0e0;
+  line-height: 1.6;
+}
+
+.container {
+  max-width: 1200px;
+  margin: 0 auto;
+  padding: 20px;
+}
+
+header {
+  text-align: center;
+  margin-bottom: 40px;
+  border-bottom: 2px solid #444;
+  padding-bottom: 20px;
+}
+
+header h1 {
+  font-size: 2.5em;
+  margin-bottom: 8px;
+  color: #ffd700;
+  text-shadow: 0 2px 4px rgba(0, 0, 0, 0.5);
+}
+
+header p {
+  font-size: 1.1em;
+  color: #b0b0b0;
+}
+
+/* ============================================================================
+   TABS
+   ============================================================================ */
+
+.tabs {
+  display: flex;
+  gap: 10px;
+  margin-bottom: 30px;
+  border-bottom: 2px solid #444;
+  flex-wrap: wrap;
+}
+
+.tab-button {
+  padding: 12px 24px;
+  background: #2a2a3e;
+  border: 2px solid transparent;
+  color: #b0b0b0;
+  cursor: pointer;
+  font-size: 1em;
+  font-weight: 600;
+  transition: all 0.3s ease;
+  border-bottom: 3px solid transparent;
+}
+
+.tab-button:hover {
+  background: #3a3a4e;
+  color: #e0e0e0;
+}
+
+.tab-button.active {
+  color: #ffd700;
+  border-bottom-color: #ffd700;
+  background: #3a3a4e;
+}
+
+.tab-content {
+  display: none;
+}
+
+.tab-content.active {
+  display: block;
+  animation: fadeIn 0.3s ease;
+}
+
+@keyframes fadeIn {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+/* ============================================================================
+   SECTIONS & CARDS
+   ============================================================================ */
+
+.section-group {
+  background: #2a2a3e;
+  border: 1px solid #444;
+  border-radius: 8px;
+  padding: 24px;
+  margin-bottom: 24px;
+}
+
+.section-group h2 {
+  color: #ffd700;
+  margin-bottom: 16px;
+  font-size: 1.4em;
+}
+
+.section-group h3 {
+  color: #d4af37;
+  margin-bottom: 12px;
+  font-size: 1.1em;
+}
+
+.section-group h4 {
+  color: #e0e0e0;
+  margin-bottom: 8px;
+}
+
+.definition-card {
+  background: #1a1a2a;
+  border: 1px solid #444;
+  border-radius: 6px;
+  padding: 12px;
+  margin-bottom: 12px;
+}
+
+.definition-card h4 {
+  color: #ffd700;
+  margin: 0 0 8px 0;
+}
+
+.definition-card p {
+  margin: 4px 0;
+  color: #b0b0b0;
+  font-size: 0.95em;
+}
+
+.definition-id {
+  font-size: 0.75em;
+  color: #666;
+  font-family: monospace;
+  margin-top: 8px;
+}
+
+.definitions-list {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(250px, 1fr));
+  gap: 12px;
+  margin-top: 12px;
+}
+
+.stat-attachment-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px;
+  background: #1a1a2a;
+  border-radius: 4px;
+  margin-bottom: 6px;
+}
+
+.stat-attachment-item label {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 0;
+  cursor: pointer;
+  color: #b0b0b0;
+  flex: 1;
+}
+
+/* ============================================================================
+   FORM ELEMENTS
+   ============================================================================ */
+
+.form-group {
+  margin-bottom: 16px;
+}
+
+.form-group label {
+  display: block;
+  margin-bottom: 6px;
+  color: #d4af37;
+  font-weight: 600;
+}
+
+.form-group input,
+.form-group textarea,
+.form-group select {
+  width: 100%;
+  padding: 10px;
+  background: #1a1a2a;
+  border: 1px solid #444;
+  color: #e0e0e0;
+  border-radius: 4px;
+  font-size: 0.95em;
+  font-family: inherit;
+}
+
+.form-group input:focus,
+.form-group textarea:focus,
+.form-group select:focus {
+  outline: none;
+  border-color: #ffd700;
+  box-shadow: 0 0 8px rgba(255, 215, 0, 0.3);
+}
+
+.form-group input::placeholder,
+.form-group textarea::placeholder {
+  color: #666;
+}
+
+.form-group textarea {
+  min-height: 80px;
+  resize: vertical;
+}
+
+/* ============================================================================
+   BUTTONS
+   ============================================================================ */
+
+.btn {
+  padding: 12px 24px;
+  border: none;
+  border-radius: 4px;
+  cursor: pointer;
+  font-size: 1em;
+  font-weight: 600;
+  transition: all 0.3s ease;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+
+.btn-primary {
+  background: linear-gradient(135deg, #ffd700, #ffed4e);
+  color: #000;
+}
+
+.btn-primary:hover {
+  background: linear-gradient(135deg, #ffed4e, #ffd700);
+  transform: translateY(-2px);
+  box-shadow: 0 4px 12px rgba(255, 215, 0, 0.3);
+}
+
+.btn-secondary {
+  background: #444;
+  color: #e0e0e0;
+}
+
+.btn-secondary:hover {
+  background: #555;
+  transform: translateY(-2px);
+}
+
+/* ============================================================================
+   MATERIAL CARDS
+   ============================================================================ */
+
+.materials-list {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
+  gap: 16px;
+}
+
+.material-card {
+  background: #1a1a2a;
+  border: 1px solid #444;
+  border-radius: 6px;
+  overflow: hidden;
+}
+
+.material-header {
+  background: linear-gradient(90deg, #3a3a4e, #2a2a3e);
+  padding: 12px 16px;
+  border-bottom: 1px solid #444;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+
+.material-header h4 {
+  color: #ffd700;
+  margin: 0;
+}
+
+.material-id {
+  font-size: 0.75em;
+  color: #888;
+  font-family: monospace;
+}
+
+.material-body {
+  padding: 16px;
+}
+
+.composition {
+  margin-bottom: 12px;
+}
+
+.composition strong {
+  color: #d4af37;
+}
+
+.comp-item {
+  padding: 4px 0;
+  color: #b0b0b0;
+  font-size: 0.95em;
+  margin-left: 12px;
+}
+
+.totals {
+  background: #2a2a3e;
+  padding: 8px 12px;
+  border-radius: 4px;
+  font-size: 0.95em;
+}
+
+.totals div {
+  padding: 4px 0;
+}
+
+/* ============================================================================
+   MATERIAL PREVIEW & REFINING
+   ============================================================================ */
+
+.material-preview {
+  background: #1a1a2a;
+  border: 1px solid #444;
+  border-radius: 4px;
+  padding: 12px;
+  margin-bottom: 16px;
+}
+
+.preview-card {
+  font-size: 0.95em;
+}
+
+.preview-card strong {
+  color: #d4af37;
+  display: block;
+  margin-bottom: 8px;
+}
+
+.preview-card div {
+  padding: 4px 0;
+  color: #b0b0b0;
+}
+
+.refine-panel {
+  background: #1a1a2a;
+  border: 1px solid #444;
+  border-radius: 6px;
+  padding: 16px;
+}
+
+.junk-list {
+  background: #2a2a3e;
+  padding: 12px;
+  border-radius: 4px;
+  margin: 12px 0;
+}
+
+.junk-item {
+  padding: 8px;
+  display: flex;
+  align-items: center;
+}
+
+.junk-item label {
+  display: flex;
+  align-items: center;
+  margin: 0;
+  cursor: pointer;
+  color: #b0b0b0;
+}
+
+.junk-item input[type='checkbox'] {
+  width: 16px;
+  height: 16px;
+  margin-right: 12px;
+  cursor: pointer;
+}
+
+.refine-output {
+  margin-top: 12px;
+}
+
+/* ============================================================================
+   TEMPLATE INFO
+   ============================================================================ */
+
+.template-info {
+  background: #1a1a2a;
+  border: 1px solid #444;
+  border-radius: 4px;
+  padding: 12px;
+  margin: 12px 0;
+}
+
+.template-card {
+  font-size: 0.95em;
+  line-height: 1.8;
+}
+
+.template-card strong {
+  color: #d4af37;
+}
+
+.template-card ul {
+  margin-left: 20px;
+  margin-top: 8px;
+}
+
+.template-card li {
+  color: #b0b0b0;
+}
+
+/* ============================================================================
+   CRAFTING WORKFLOW
+   ============================================================================ */
+
+.crafting-workflow {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+  gap: 24px;
+  margin-bottom: 32px;
+}
+
+.workflow-step {
+  background: #1a1a2a;
+  border: 2px solid #444;
+  border-radius: 6px;
+  padding: 16px;
+}
+
+.workflow-step h3 {
+  color: #ffd700;
+  margin-bottom: 16px;
+  text-align: center;
+}
+
+.workflow-step select {
+  width: 100%;
+  margin-bottom: 12px;
+}
+
+/* ============================================================================
+   STATS DISPLAY
+   ============================================================================ */
+
+.stats-display {
+  background: #1a1a2a;
+  border: 1px solid #444;
+  border-radius: 4px;
+  padding: 12px;
+  margin: 12px 0;
+  font-size: 0.95em;
+}
+
+.stat-item {
+  display: flex;
+  justify-content: space-between;
+  padding: 6px 0;
+  border-bottom: 1px solid #333;
+}
+
+.stat-item:last-child {
+  border-bottom: none;
+}
+
+.stat-item span {
+  color: #d4af37;
+  font-weight: 600;
+}
+
+.stat-item strong {
+  color: #ffd700;
+}
+
+/* ============================================================================
+   PART SLOTS
+   ============================================================================ */
+
+.part-slots {
+  background: #1a1a2a;
+  border: 1px solid #444;
+  border-radius: 4px;
+  padding: 16px;
+  margin: 16px 0;
+}
+
+.slot {
+  margin-bottom: 16px;
+}
+
+.slot:last-child {
+  margin-bottom: 0;
+}
+
+.slot label {
+  display: block;
+  margin-bottom: 6px;
+  color: #d4af37;
+  font-weight: 600;
+}
+
+.slot select {
+  width: 100%;
+}
+
+/* ============================================================================
+   INVENTORY
+   ============================================================================ */
+
+.inventory-list {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(320px, 1fr));
+  gap: 16px;
+}
+
+.inventory-card {
+  background: #1a1a2a;
+  border: 1px solid #444;
+  border-radius: 6px;
+  overflow: hidden;
+}
+
+.card-header {
+  background: linear-gradient(90deg, #3a3a4e, #2a2a3e);
+  padding: 12px 16px;
+  border-bottom: 1px solid #444;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+
+.card-header h4 {
+  color: #ffd700;
+  margin: 0;
+  flex: 1;
+}
+
+.type-badge {
+  background: #444;
+  color: #ffd700;
+  padding: 4px 12px;
+  border-radius: 12px;
+  font-size: 0.85em;
+  font-weight: 600;
+}
+
+.card-body {
+  padding: 16px;
+  font-size: 0.95em;
+}
+
+.card-body > div {
+  padding: 4px 0;
+  color: #b0b0b0;
+}
+
+.card-body .stats-display {
+  margin-top: 12px;
+}
+
+/* ============================================================================
+   SYSTEMS
+   ============================================================================ */
+
+.systems-list {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+  gap: 16px;
+}
+
+.system-card {
+  background: #1a1a2a;
+  border: 1px solid #444;
+  border-radius: 6px;
+  padding: 16px;
+}
+
+.system-card h4 {
+  color: #ffd700;
+  margin-bottom: 8px;
+}
+
+.system-card p {
+  color: #b0b0b0;
+  margin-bottom: 12px;
+  font-size: 0.95em;
+}
+
+.component-count {
+  background: #2a2a3e;
+  color: #d4af37;
+  padding: 6px 8px;
+  border-radius: 4px;
+  font-size: 0.9em;
+  font-weight: 600;
+}
+
+/* ============================================================================
+   MESSAGES
+   ============================================================================ */
+
+.success {
+  background: #1a3a1a;
+  border: 1px solid #2a6a2a;
+  color: #7fff7f;
+  padding: 12px;
+  border-radius: 4px;
+  margin-top: 12px;
+}
+
+.empty {
+  color: #888;
+  font-style: italic;
+  text-align: center;
+  padding: 20px;
+}
+
+.output-message {
+  margin-top: 16px;
+}
+
+/* ============================================================================
+   RESPONSIVE DESIGN
+   ============================================================================ */
+
+@media (max-width: 768px) {
+  .container {
+    padding: 12px;
+  }
+
+  header h1 {
+    font-size: 1.8em;
+  }
+
+  .tabs {
+    flex-direction: column;
+  }
+
+  .tab-button {
+    width: 100%;
+    text-align: left;
+  }
+
+  .crafting-workflow {
+    grid-template-columns: 1fr;
+  }
+
+  .materials-list,
+  .inventory-list,
+  .systems-list {
+    grid-template-columns: 1fr;
+  }
+
+  .section-group {
+    padding: 16px;
+  }
+}

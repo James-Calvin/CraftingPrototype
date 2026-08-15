@@ -1,0 +1,278 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Crafting System Prototype</title>
+  <link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+  <div class="container">
+    <header>
+      <h1>🔨 Crafting System Prototype</h1>
+      <p>Design items with intention: harvest, refine, craft, and assemble.</p>
+    </header>
+
+    <nav class="tabs">
+      <button class="tab-button active" data-tab="design">Design</button>
+      <button class="tab-button" data-tab="materials">Materials</button>
+      <button class="tab-button" data-tab="crafting">Crafting</button>
+      <button class="tab-button" data-tab="inventory">Inventory</button>
+      <button class="tab-button" data-tab="systems">Systems</button>
+    </nav>
+
+    <!-- DESIGN TAB -->
+    <section id="design-tab" class="tab-content active">
+      <div class="section-group">
+        <h2>Define Stats</h2>
+        <div class="form-group">
+          <label>Stat Name:</label>
+          <input type="text" id="design-stat-name" placeholder="e.g., Action, Base, Crit" />
+        </div>
+        <div class="form-group">
+          <label>Description:</label>
+          <input type="text" id="design-stat-description" placeholder="What does this stat do?" />
+        </div>
+        <button id="design-create-stat-button" class="btn btn-primary">Create Stat</button>
+        <div id="design-stats-list" class="definitions-list"></div>
+      </div>
+
+      <div class="section-group">
+        <h2>Define Substances</h2>
+        <div class="form-group">
+          <label>Substance Name:</label>
+          <input type="text" id="design-substance-name" placeholder="e.g., Iron, Gold" />
+        </div>
+        <div class="form-group">
+          <label>Density (g/cm³):</label>
+          <input type="number" id="design-substance-density" placeholder="e.g., 7.86" min="0" step="0.01" />
+        </div>
+        <div class="form-group">
+          <label>Description:</label>
+          <input type="text" id="design-substance-description" placeholder="Brief description" />
+        </div>
+        <div id="design-substance-stats" class="stats-attachment"></div>
+        <button id="design-create-substance-button" class="btn btn-primary">Create Substance</button>
+        <div class="section-split">
+          <div class="form-group">
+            <label>Random Material Name:</label>
+            <input type="text" id="random-material-name" placeholder="e.g., Rare Alloy" />
+          </div>
+          <div class="form-group">
+            <label>Total Volume (cm³):</label>
+            <input type="number" id="random-material-volume" placeholder="e.g., 100" min="10" step="10" value="100" />
+          </div>
+          <button id="create-random-material-button" class="btn btn-secondary">Create Random Material</button>
+        </div>
+        <div id="design-substances-list" class="definitions-list"></div>
+      </div>
+
+      <div class="section-group">
+        <h2>Define Part Types</h2>
+        <div class="form-group">
+          <label>Type Name:</label>
+          <input type="text" id="design-parttype-name" placeholder="e.g., Blade, Handle" />
+        </div>
+        <div class="form-group">
+          <label>Description:</label>
+          <input type="text" id="design-parttype-description" placeholder="What is this part?" />
+        </div>
+        <button id="design-create-parttype-button" class="btn btn-primary">Create Part Type</button>
+        <div id="design-parttypes-list" class="definitions-list"></div>
+      </div>
+
+      <div class="section-group">
+        <h2>Define Part Templates</h2>
+        <div class="form-group">
+          <label>Template Name:</label>
+          <input type="text" id="design-template-name" placeholder="e.g., Basic Blade" />
+        </div>
+        <div class="form-group">
+          <label>Part Type:</label>
+          <select id="design-template-parttype">
+            <option value="">Select part type...</option>
+          </select>
+        </div>
+        <div class="form-group">
+          <label>Volume Required (cm³):</label>
+          <input type="number" id="design-template-volume" placeholder="e.g., 100" min="1" step="1" />
+        </div>
+        <div class="form-group">
+          <label>Description:</label>
+          <input type="text" id="design-template-description" placeholder="Brief description" />
+        </div>
+        <button id="design-create-template-button" class="btn btn-primary">Create Part Template</button>
+        <div id="design-templates-list" class="definitions-list"></div>
+      </div>
+
+      <div class="section-group">
+        <h2>Define Item Templates</h2>
+        <div class="form-group">
+          <label>Item Name:</label>
+          <input type="text" id="design-item-name" placeholder="e.g., Sword" />
+        </div>
+        <div class="form-group">
+          <label>Description:</label>
+          <input type="text" id="design-item-description" placeholder="What is this item?" />
+        </div>
+        <div id="design-item-parts" class="item-parts-selector"></div>
+        <button id="design-create-item-button" class="btn btn-primary">Create Item Template</button>
+        <div id="design-items-list" class="definitions-list"></div>
+      </div>
+    </section>
+
+    <!-- MATERIALS TAB -->
+    <section id="materials-tab" class="tab-content">
+      <div class="section-group">
+        <h2>Material Batches</h2>
+        <div id="materials-list" class="materials-list"></div>
+      </div>
+
+      <div class="section-group">
+        <h2>Refining & Junk Separation</h2>
+        <div id="refine-panel" class="refine-panel">
+          <select id="refine-material-select">
+            <option value="">Select material to refine...</option>
+          </select>
+          <div class="form-group compact">
+            <label>Percent to Separate (%):</label>
+            <input type="number" id="refine-junk-percent" min="1" max="100" step="1" value="100" />
+          </div>
+          <div id="material-composition" class="material-composition"></div>
+          <button id="refine-button" class="btn btn-secondary">Separate Junk</button>
+          <div id="refine-output" class="refine-output"></div>
+        </div>
+      </div>
+
+      <div class="section-group">
+        <h2>Create Material Batch</h2>
+        <div class="form-group">
+          <label>Material Name:</label>
+          <input type="text" id="new-material-name" placeholder="e.g., Iron Ore" />
+        </div>
+        <div class="form-group">
+          <label>Add Substance:</label>
+          <select id="substance-select">
+            <option value="">Select substance...</option>
+          </select>
+          <input type="number" id="substance-volume" placeholder="Volume (cm³)" min="1" step="0.1" />
+          <button id="add-substance-button" class="btn btn-secondary">Add Substance</button>
+        </div>
+        <div id="new-material-preview" class="material-preview"></div>
+        <button id="create-material-button" class="btn btn-primary">Create Material</button>
+      </div>
+
+      <div class="section-group">
+        <h2>Merge Material Batches</h2>
+        <div class="form-group">
+          <label>Batch A:</label>
+          <select id="merge-material-a-select">
+            <option value="">Select batch A...</option>
+          </select>
+        </div>
+        <div class="form-group">
+          <label>Batch B:</label>
+          <select id="merge-material-b-select">
+            <option value="">Select batch B...</option>
+          </select>
+        </div>
+        <button id="merge-materials-button" class="btn btn-secondary">Merge Batches</button>
+      </div>
+    </section>
+
+    <!-- CRAFTING TAB -->
+    <section id="crafting-tab" class="tab-content">
+      <div class="section-group">
+        <h2>Parts</h2>
+        <div id="craft-parts-inventory" class="mini-inventory"></div>
+        <div class="workflow-step">
+          <h3>Craft a Part</h3>
+          <div class="form-group">
+            <label>Part Name:</label>
+            <input type="text" id="part-name" placeholder="e.g., Iron Blade" />
+          </div>
+          <div class="form-group">
+            <label>Source Material:</label>
+            <select id="craft-material-select">
+              <option value="">Select material for crafting...</option>
+            </select>
+          </div>
+          <div class="form-group">
+            <label>Part Template:</label>
+            <select id="craft-template-select">
+              <option value="">Select part template...</option>
+            </select>
+          </div>
+          <div id="craft-material-stats" class="stats-display"></div>
+          <div id="template-info" class="template-info"></div>
+          <button id="create-part-button" class="btn btn-primary">Create Part</button>
+          <div id="part-created-output" class="output-message"></div>
+        </div>
+      </div>
+
+      <div class="section-group">
+        <h2>Items</h2>
+        <div id="craft-item-inventory" class="mini-inventory"></div>
+        <div id="craft-item-parts-inventory" class="mini-inventory"></div>
+        <div class="workflow-step">
+          <h3>Craft an Item</h3>
+          <div class="form-group">
+            <label>Item Template:</label>
+            <select id="assemble-template-select">
+              <option value="">Select item template...</option>
+            </select>
+            <div id="assemble-template-info" class="template-info"></div>
+          </div>
+
+          <div class="form-group">
+            <label>Item Name:</label>
+            <input type="text" id="item-name" placeholder="e.g., Dragon Slayer Dagger" />
+          </div>
+
+          <div id="part-slots" class="part-slots"></div>
+
+          <button id="assemble-button" class="btn btn-primary">Assemble Item</button>
+          <div id="item-created-output" class="output-message"></div>
+        </div>
+      </div>
+    </section>
+
+    <!-- INVENTORY TAB -->
+    <section id="inventory-tab" class="tab-content">
+      <div class="section-group">
+        <h2>Parts</h2>
+        <div id="parts-list" class="inventory-list"></div>
+      </div>
+
+      <div class="section-group">
+        <h2>Items</h2>
+        <div id="items-list" class="inventory-list"></div>
+      </div>
+    </section>
+
+    <!-- SYSTEMS TAB -->
+    <section id="systems-tab" class="tab-content">
+      <div class="section-group">
+        <h2>Registered Systems</h2>
+        <div id="systems-list" class="systems-list"></div>
+      </div>
+
+      <div class="section-group">
+        <h2>Create Custom System</h2>
+        <div class="form-group">
+          <label>System Name:</label>
+          <input type="text" id="system-name" placeholder="e.g., Rune Magic" />
+        </div>
+        <div class="form-group">
+          <label>Description:</label>
+          <textarea id="system-description" placeholder="Describe what this system does..."></textarea>
+        </div>
+        <button id="create-system-button" class="btn btn-primary">Create System</button>
+      </div>
+    </section>
+  </div>
+
+  <script src="crafting-system.js"></script>
+  <script src="ui.js"></script>
+</body>
+</html>
