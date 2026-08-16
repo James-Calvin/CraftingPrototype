@@ -11,6 +11,12 @@
     <header>
       <h1>🔨 Crafting System Prototype</h1>
       <p>Design items with intention: harvest, refine, craft, and assemble.</p>
+      <div class="workspace-actions">
+        <button id="export-data-button" class="btn btn-secondary">Export Data</button>
+        <button id="import-data-button" class="btn btn-secondary">Import Data</button>
+        <button id="reset-data-button" class="btn btn-danger">Reset All Data</button>
+        <input id="import-data-file" type="file" accept="application/json,.json" hidden />
+      </div>
     </header>
 
     <nav class="tabs">
@@ -23,20 +29,6 @@
 
     <!-- DESIGN TAB -->
     <section id="design-tab" class="tab-content active">
-      <div class="section-group">
-        <h2>Define Stats</h2>
-        <div class="form-group">
-          <label>Stat Name:</label>
-          <input type="text" id="design-stat-name" placeholder="e.g., Action, Base, Crit" />
-        </div>
-        <div class="form-group">
-          <label>Description:</label>
-          <input type="text" id="design-stat-description" placeholder="What does this stat do?" />
-        </div>
-        <button id="design-create-stat-button" class="btn btn-primary">Create Stat</button>
-        <div id="design-stats-list" class="definitions-list"></div>
-      </div>
-
       <div class="section-group">
         <h2>Define Substances</h2>
         <div class="form-group">
@@ -51,19 +43,7 @@
           <label>Description:</label>
           <input type="text" id="design-substance-description" placeholder="Brief description" />
         </div>
-        <div id="design-substance-stats" class="stats-attachment"></div>
         <button id="design-create-substance-button" class="btn btn-primary">Create Substance</button>
-        <div class="section-split">
-          <div class="form-group">
-            <label>Random Material Name:</label>
-            <input type="text" id="random-material-name" placeholder="e.g., Rare Alloy" />
-          </div>
-          <div class="form-group">
-            <label>Total Volume (cm³):</label>
-            <input type="number" id="random-material-volume" placeholder="e.g., 100" min="10" step="10" value="100" />
-          </div>
-          <button id="create-random-material-button" class="btn btn-secondary">Create Random Material</button>
-        </div>
         <div id="design-substances-list" class="definitions-list"></div>
       </div>
 
@@ -145,21 +125,41 @@
       </div>
 
       <div class="section-group">
-        <h2>Create Material Batch</h2>
-        <div class="form-group">
-          <label>Material Name:</label>
-          <input type="text" id="new-material-name" placeholder="e.g., Iron Ore" />
+        <h2>Create Material Batches</h2>
+        <div class="creation-panel">
+          <h3>Random Batch Generator</h3>
+          <p class="section-description">Generate a mixed batch from the currently defined non-Junk substances.</p>
+          <div class="section-split">
+            <div class="form-group">
+              <label>Material Name:</label>
+              <input type="text" id="random-material-name" placeholder="e.g., Rare Alloy" />
+            </div>
+            <div class="form-group">
+              <label>Total Volume (cm³):</label>
+              <input type="number" id="random-material-volume" placeholder="e.g., 100" min="10" step="10" value="100" />
+            </div>
+            <button id="create-random-material-button" class="btn btn-primary">Create Random Material Batch</button>
+          </div>
         </div>
-        <div class="form-group">
-          <label>Add Substance:</label>
-          <select id="substance-select">
-            <option value="">Select substance...</option>
-          </select>
-          <input type="number" id="substance-volume" placeholder="Volume (cm³)" min="1" step="0.1" />
-          <button id="add-substance-button" class="btn btn-secondary">Add Substance</button>
+
+        <div class="creation-panel">
+          <h3>Manual Batch Builder</h3>
+          <div class="form-group">
+            <label>Material Name:</label>
+            <input type="text" id="new-material-name" placeholder="e.g., Iron Ore" />
+          </div>
+          <div class="form-group">
+            <label>Add Substance:</label>
+            <select id="substance-select">
+              <option value="">Select substance...</option>
+            </select>
+            <input type="number" id="substance-volume" placeholder="Volume (cm³)" min="1" step="0.1" />
+            <label class="inline-check"><input type="checkbox" id="substance-is-junk" /> Mark as junk</label>
+            <button id="add-substance-button" class="btn btn-secondary">Add Substance</button>
+          </div>
+          <div id="new-material-preview" class="material-preview"></div>
+          <button id="create-material-button" class="btn btn-primary">Create Material</button>
         </div>
-        <div id="new-material-preview" class="material-preview"></div>
-        <button id="create-material-button" class="btn btn-primary">Create Material</button>
       </div>
 
       <div class="section-group">
@@ -197,13 +197,13 @@
               <option value="">Select material for crafting...</option>
             </select>
           </div>
+          <div id="craft-material-systems" class="source-material-preview"></div>
           <div class="form-group">
             <label>Part Template:</label>
             <select id="craft-template-select">
               <option value="">Select part template...</option>
             </select>
           </div>
-          <div id="craft-material-stats" class="stats-display"></div>
           <div id="template-info" class="template-info"></div>
           <button id="create-part-button" class="btn btn-primary">Create Part</button>
           <div id="part-created-output" class="output-message"></div>
@@ -266,6 +266,13 @@
         <div class="form-group">
           <label>Description:</label>
           <textarea id="system-description" placeholder="Describe what this system does..."></textarea>
+        </div>
+        <div class="form-group">
+          <label>Processor Preset:</label>
+          <select id="system-processor">
+            <option value="flat">Flat amount</option>
+            <option value="volume">Linearly scaled by volume</option>
+          </select>
         </div>
         <button id="create-system-button" class="btn btn-primary">Create System</button>
       </div>
