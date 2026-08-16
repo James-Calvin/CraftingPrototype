@@ -2,6 +2,98 @@
 // UI RENDERING AND INTERACTION LOGIC
 // ============================================================================
 
+function escapeHtml(value) {
+  return String(value ?? '').replace(/[&<>'"]/g, (character) => ({
+    '&': '&amp;', '<': '&lt;', '>': '&gt;', "'": '&#39;', '"': '&quot;',
+  })[character]);
+}
+
+function promptText(label, currentValue) {
+  const result = prompt(label, currentValue ?? '');
+  return result === null ? null : result.trim();
+}
+
+function confirmDelete(label) {
+  return confirm(`Delete ${label}? Dependent definitions and inventory records will also be updated.`);
+}
+
+function fieldInputHtml(entity, system, label, field) {
+  const value = entity.systemData?.[system.id]?.[label.id]?.[field.id];
+  const attrs = `class="system-value-input" data-entity-target="${getEntityTarget(entity)}" data-entity-id="${entity.id}" data-system-id="${system.id}" data-label-id="${label.id}" data-field-id="${field.id}"`;
+  if (field.type === 'boolean') return `<input type="checkbox" ${attrs} ${value === true ? 'checked' : ''}>`;
+  if (field.type === 'choice') {
+    return `<select ${attrs}><option value="">Unset</option>${field.options.map((option) => `<option value="${option.id}" ${value === option.id ? 'selected' : ''}>${escapeHtml(option.label)}</option>`).join('')}</select>`;
+  }
+  const type = field.type === 'number' ? 'number' : 'text';
+  const step = field.type === 'number' ? 'step="any"' : '';
+  return `<input type="${type}" ${step} value="${escapeHtml(value ?? '')}" ${attrs}>`;
+}
+
+function renderEntitySystemData(entity, target, onlySystemId = null) {
+  const systems = Object.values(state.systems).filter((system) => system.targets[target] && (!onlySystemId || system.id === onlySystemId));
+  if (!systems.length) return '<p class="empty">No systems target this definition type.</p>';
+  return systems.map((system) => `
+    <div class="attached-system-card">
+      <h5>${escapeHtml(system.name)}</h5>
+      ${Object.values(system.labels).map((label) => `
+        <div class="attached-label-row">
+          <strong>${escapeHtml(label.name)}</strong>
+          ${Object.values(system.fields).map((field) => `<label>${escapeHtml(field.name)}${fieldInputHtml(entity, system, label, field)}</label>`).join('') || '<em>No fields defined</em>'}
+        </div>
+      `).join('') || '<p class="empty">No labels defined.</p>'}
+    </div>
+  `).join('');
+}
+
+function bindSystemDataInputs(container = document) {
+  container.querySelectorAll('.system-value-input').forEach((input) => {
+    input.addEventListener('change', () => {
+      const entity = getTargetCollection(input.dataset.entityTarget)[input.dataset.entityId];
+      const value = input.type === 'checkbox' ? input.checked : input.value;
+      setSystemValue(entity, input.dataset.systemId, input.dataset.labelId, input.dataset.fieldId, value);
+      renderAllTabs();
+    });
+  });
+}
+
+function displayFieldValue(field, value) {
+  if (field.type === 'choice') return field.options.find((option) => option.id === value)?.label || 'Unknown option';
+  if (field.type === 'boolean') return value ? 'True' : 'False';
+  return String(value);
+}
+
+function evaluationHtml(evaluation, showMaterialRate = false) {
+  const { system, records, aggregates, contextVolumeCm3 } = evaluation;
+  const numericRows = [];
+  if (aggregates) {
+    Object.values(system.labels).forEach((label) => {
+      Object.values(system.fields).filter((field) => field.type === 'number').forEach((field) => {
+        const total = aggregates[label.id]?.[field.id] || 0;
+        const suffix = Object.values(system.fields).filter((entry) => entry.type === 'number').length > 1 ? ` · ${field.name}` : '';
+        const rate = showMaterialRate && system.processorId === 'volume' && contextVolumeCm3 > 0 ? `<small>${(total / contextVolumeCm3).toFixed(3)} / cm³</small>` : '';
+        numericRows.push(`<div class="calculation-item"><span>${escapeHtml(label.name + suffix)}:</span><strong>${total.toFixed(3)} ${rate}</strong></div>`);
+      });
+    });
+  }
+
+  const recordRows = records.flatMap((record) => {
+    const label = system.labels[record.labelId];
+    return Object.entries(record.fields).filter(([fieldId]) => !aggregates || system.fields[fieldId]?.type !== 'number').map(([fieldId, value]) => {
+      const field = system.fields[fieldId];
+      if (!field) return '';
+      const source = getTargetCollection(record.sourceType)[record.sourceId];
+      return `<div class="system-record-row"><span>${escapeHtml(label?.name || 'Label')} · ${escapeHtml(field.name)}</span><strong>${escapeHtml(displayFieldValue(field, value))}</strong><small>${escapeHtml(source?.name || record.sourceType)}</small></div>`;
+    });
+  }).join('');
+
+  return `<div class="calculated-system-card"><div class="calculated-system-header"><h5>${escapeHtml(system.name)}</h5><span class="type-badge">${system.processorId === 'volume' ? 'Volume-scaled' : 'Flat'}</span></div>${numericRows.join('')}${recordRows || (!numericRows.length ? '<p class="empty">No contributions.</p>' : '')}</div>`;
+}
+
+function visibleSystemsHtml(context, showMaterialRate = false) {
+  const evaluations = evaluateVisibleSystems(context);
+  return evaluations.length ? evaluations.map((evaluation) => evaluationHtml(evaluation, showMaterialRate)).join('') : '<p class="empty">No systems are opted into crafting calculations.</p>';
+}
+
 function renderAllTabs() {
   renderDesignTab();
   renderMaterialsTab();
@@ -31,65 +123,12 @@ document.querySelectorAll('.tab-button').forEach((button) => {
 // ============================================================================
 
 function renderDesignTab() {
-  renderStatsDefinitions();
   renderSubstancesDefinitions();
   renderPartTypesDefinitions();
   renderPartTemplatesDefinitions();
   renderItemTemplatesDefinitions();
   updateDesignSelects();
 }
-
-function renderStatsDefinitions() {
-  const container = document.getElementById('design-stats-list');
-  const stats = Object.values(state.stats);
-
-  if (stats.length === 0) {
-    container.innerHTML = '<p class="empty">No stats defined yet.</p>';
-    return;
-  }
-
-  container.innerHTML = stats
-    .map((stat) => `
-      <div class="definition-card">
-        <h4>${stat.name}</h4>
-        <p>${stat.description || 'No description'}</p>
-        <div class="definition-id">${stat.id.substr(0, 20)}</div>
-        <button class="btn btn-secondary delete-stat-button" data-stat-id="${stat.id}">Delete Stat</button>
-      </div>
-    `)
-    .join('');
-
-  document.querySelectorAll('.delete-stat-button').forEach((button) => {
-    button.addEventListener('click', () => {
-      const statId = button.dataset.statId;
-      if (deleteStat(statId)) {
-        renderAllTabs();
-      }
-    });
-  });
-}
-
-document.addEventListener('DOMContentLoaded', () => {
-  setTimeout(() => {
-    const btn = document.getElementById('design-create-stat-button');
-    if (btn) {
-      btn.addEventListener('click', () => {
-        const name = document.getElementById('design-stat-name').value;
-        const description = document.getElementById('design-stat-description').value;
-
-        if (!name) {
-          alert('Please enter a stat name');
-          return;
-        }
-
-        createStat(name, description);
-        document.getElementById('design-stat-name').value = '';
-        document.getElementById('design-stat-description').value = '';
-        renderAllTabs();
-      });
-    }
-  }, 100);
-});
 
 function renderSubstancesDefinitions() {
   const container = document.getElementById('design-substances-list');
@@ -100,25 +139,33 @@ function renderSubstancesDefinitions() {
     return;
   }
 
-  container.innerHTML = substances
-    .map((substance) => {
-      const statsHtml = Object.entries(substance.statsPerCm3)
-        .map(([statId, value]) => {
-          const stat = state.stats[statId];
-          return stat ? `<div>${stat.name}: +${value}</div>` : '';
-        })
-        .join('');
-
-      return `
+  container.innerHTML = substances.map((substance) => `
         <div class="definition-card">
-          <h4>${substance.name}</h4>
+          <h4>${escapeHtml(substance.name)}</h4>
           <div>Density: <strong>${substance.densityGramsPerCm3} g/cm³</strong></div>
-          <div style="margin-top: 8px; font-size: 0.9em;">${substance.description || 'No description'}</div>
-          <div class="substance-stats" style="margin-top: 8px; font-size: 0.9em;">${statsHtml || '<em>No stats</em>'}</div>
+          <div style="margin-top: 8px; font-size: 0.9em;">${escapeHtml(substance.description || 'No description')}</div>
+          <div class="entity-system-data">${renderEntitySystemData(substance, 'substance')}</div>
+          <button class="btn btn-secondary edit-substance-button" data-substance-id="${substance.id}">Edit</button>
+          <button class="btn btn-danger delete-substance-button" data-substance-id="${substance.id}">Delete</button>
         </div>
-      `;
-    })
-    .join('');
+      `).join('');
+
+  container.querySelectorAll('.edit-substance-button').forEach((button) => button.addEventListener('click', () => {
+    const substance = state.substances[button.dataset.substanceId];
+    const name = promptText('Substance name', substance.name);
+    if (name === null || !name) return;
+    const density = Number(promptText('Density (g/cm³)', substance.densityGramsPerCm3));
+    if (!Number.isFinite(density) || density <= 0) return alert('Density must be greater than zero.');
+    const description = promptText('Substance description', substance.description);
+    if (description === null) return;
+    substance.name = name; substance.densityGramsPerCm3 = density; substance.description = description;
+    persistState(); renderAllTabs();
+  }));
+  container.querySelectorAll('.delete-substance-button').forEach((button) => button.addEventListener('click', () => {
+    const substance = state.substances[button.dataset.substanceId];
+    if (confirmDelete(`substance “${substance.name}”`)) { deleteSubstance(substance.id); renderAllTabs(); }
+  }));
+  bindSystemDataInputs(container);
 }
 
 document.addEventListener('DOMContentLoaded', () => {
@@ -135,16 +182,7 @@ document.addEventListener('DOMContentLoaded', () => {
           return;
         }
 
-        const substance = createSubstance(name, density, description);
-
-        document.querySelectorAll('.design-stat-checkbox:checked').forEach((checkbox) => {
-          const statId = checkbox.value;
-          const valueInput = document.getElementById(`design-stat-value-${statId}`);
-          const value = parseFloat(valueInput.value);
-          if (!isNaN(value)) {
-            substance.addStat(state.stats[statId], value);
-          }
-        });
+        createSubstance(name, density, description);
 
         document.getElementById('design-substance-name').value = '';
         document.getElementById('design-substance-density').value = '';
@@ -168,23 +206,6 @@ document.addEventListener('DOMContentLoaded', () => {
 });
 
 function updateDesignSelects() {
-  const statsList = Object.values(state.stats);
-  const statsHtml = statsList
-    .map(
-      (stat) => `
-        <div class="stat-attachment-item">
-          <label>
-            <input type="checkbox" class="design-stat-checkbox" value="${stat.id}" />
-            ${stat.name}:
-            <input type="number" id="design-stat-value-${stat.id}" placeholder="Value per cm³" step="0.01" style="width: 100px;" />
-          </label>
-        </div>
-      `
-    )
-    .join('');
-  const statDiv = document.getElementById('design-substance-stats');
-  if (statDiv) statDiv.innerHTML = statsHtml || '<p class="empty">No stats defined yet</p>';
-
   const partTypeSelect = document.getElementById('design-template-parttype');
   if (partTypeSelect) {
     const currentValue = partTypeSelect.value;
@@ -211,11 +232,38 @@ function renderPartTypesDefinitions() {
   container.innerHTML = types
     .map((type) => `
       <div class="definition-card">
-        <h4>${type.name}</h4>
-        <p>${type.description || 'No description'}</p>
+        <h4>${escapeHtml(type.name)}</h4>
+        <p>${escapeHtml(type.description || 'No description')}</p>
+        <div class="entity-system-data">${renderEntitySystemData(type, 'partType')}</div>
+        <button class="btn btn-secondary edit-parttype-button" data-parttype-id="${type.id}">Edit</button>
+        <button class="btn btn-danger delete-parttype-button" data-parttype-id="${type.id}">Delete</button>
       </div>
     `)
     .join('');
+
+  container.querySelectorAll('.edit-parttype-button').forEach((button) => {
+    button.addEventListener('click', () => {
+      const partType = state.partTypes[button.dataset.parttypeId];
+      const name = promptText('Part type name', partType.name);
+      if (name === null || !name) return;
+      const description = promptText('Part type description', partType.description);
+      if (description === null) return;
+      partType.name = name;
+      partType.description = description;
+      persistState();
+      renderAllTabs();
+    });
+  });
+  container.querySelectorAll('.delete-parttype-button').forEach((button) => {
+    button.addEventListener('click', () => {
+      const partType = state.partTypes[button.dataset.parttypeId];
+      if (confirmDelete(`part type “${partType.name}”`)) {
+        deletePartType(partType.id);
+        renderAllTabs();
+      }
+    });
+  });
+  bindSystemDataInputs(container);
 }
 
 document.addEventListener('DOMContentLoaded', () => {
@@ -252,13 +300,50 @@ function renderPartTemplatesDefinitions() {
   container.innerHTML = templates
     .map((template) => `
       <div class="definition-card">
-        <h4>${template.name}</h4>
-        <div>Type: <strong>${template.partType.name}</strong></div>
+        <h4>${escapeHtml(template.name)}</h4>
+        <div>Type: <strong>${escapeHtml(template.partType.name)}</strong></div>
         <div>Volume: <strong>${template.volumeCm3} cm³</strong></div>
-        <p>${template.description || 'No description'}</p>
+        <p>${escapeHtml(template.description || 'No description')}</p>
+        <div class="entity-system-data">${renderEntitySystemData(template, 'partTemplate')}</div>
+        <button class="btn btn-secondary edit-parttemplate-button" data-template-id="${template.id}">Edit</button>
+        <button class="btn btn-danger delete-parttemplate-button" data-template-id="${template.id}">Delete</button>
       </div>
     `)
     .join('');
+
+  container.querySelectorAll('.edit-parttemplate-button').forEach((button) => {
+    button.addEventListener('click', () => {
+      const template = state.partTemplates[button.dataset.templateId];
+      const name = promptText('Part template name', template.name);
+      if (name === null || !name) return;
+      const typeName = promptText(`Part type (${Object.values(state.partTypes).map((type) => type.name).join(', ')})`, template.partType.name);
+      if (typeName === null) return;
+      const partType = Object.values(state.partTypes).find((type) => type.name.toLowerCase() === typeName.toLowerCase());
+      if (!partType) return alert('No part type has that name.');
+      const volumeText = promptText('Required volume (cm³)', template.volumeCm3);
+      if (volumeText === null) return;
+      const volume = Number(volumeText);
+      if (!Number.isFinite(volume) || volume <= 0) return alert('Volume must be greater than zero.');
+      const description = promptText('Part template description', template.description);
+      if (description === null) return;
+      template.name = name;
+      template.partType = partType;
+      template.volumeCm3 = volume;
+      template.description = description;
+      persistState();
+      renderAllTabs();
+    });
+  });
+  container.querySelectorAll('.delete-parttemplate-button').forEach((button) => {
+    button.addEventListener('click', () => {
+      const template = state.partTemplates[button.dataset.templateId];
+      if (confirmDelete(`part template “${template.name}”`)) {
+        deletePartTemplate(template.id);
+        renderAllTabs();
+      }
+    });
+  });
+  bindSystemDataInputs(container);
 }
 
 document.addEventListener('DOMContentLoaded', () => {
@@ -296,17 +381,20 @@ function renderItemTemplatesDefinitions() {
   } else {
     container.innerHTML = templates
       .map((template) => {
-        const requiredHtml = template.requiredParts.map((r) => `<li>${r.partType.name}<button class="remove-part-button" data-template-id="${template.id}" data-role="required" data-parttype-id="${r.partType.id}">Remove</button></li>`).join('');
-        const optionalHtml = template.electiveParts.map((o) => `<li>${o.partType.name}<button class="remove-part-button" data-template-id="${template.id}" data-role="optional" data-parttype-id="${o.partType.id}">Remove</button></li>`).join('');
+        const requiredHtml = template.requiredParts.map((r) => `<li>${escapeHtml(r.partType.name)} × ${r.count || 1} (required) <button class="edit-part-count-button" data-template-id="${template.id}" data-role="required" data-parttype-id="${r.partType.id}">Edit count</button><button class="remove-part-button" data-template-id="${template.id}" data-role="required" data-parttype-id="${r.partType.id}">Remove</button></li>`).join('');
+        const optionalHtml = template.electiveParts.map((o) => `<li>${escapeHtml(o.partType.name)} × ${o.count || 1} (optional) <button class="edit-part-count-button" data-template-id="${template.id}" data-role="optional" data-parttype-id="${o.partType.id}">Edit count</button><button class="remove-part-button" data-template-id="${template.id}" data-role="optional" data-parttype-id="${o.partType.id}">Remove</button></li>`).join('');
 
         return `
           <div class="definition-card">
-            <h4>${template.name}</h4>
-            <p>${template.description || 'No description'}</p>
+            <h4>${escapeHtml(template.name)}</h4>
+            <p>${escapeHtml(template.description || 'No description')}</p>
             <div style="margin-top: 8px;">
               <strong>Parts:</strong>
               <ul style="margin: 4px 0 0 20px;">${requiredHtml}${optionalHtml}</ul>
             </div>
+            <div class="entity-system-data">${renderEntitySystemData(template, 'itemTemplate')}</div>
+            <button class="btn btn-secondary edit-itemtemplate-button" data-template-id="${template.id}">Edit</button>
+            <button class="btn btn-danger delete-itemtemplate-button" data-template-id="${template.id}">Delete</button>
           </div>
         `;
       })
@@ -325,6 +413,42 @@ function renderItemTemplatesDefinitions() {
       renderAllTabs();
     });
   });
+  document.querySelectorAll('.edit-part-count-button').forEach((button) => {
+    button.addEventListener('click', () => {
+      const template = state.itemTemplates[button.dataset.templateId];
+      const collection = button.dataset.role === 'required' ? template.requiredParts : template.electiveParts;
+      const requirement = collection.find((entry) => entry.partType.id === button.dataset.parttypeId);
+      const countText = promptText('Slot count', requirement.count || 1);
+      if (countText === null) return;
+      const count = Number(countText);
+      if (!Number.isInteger(count) || count < 1) return alert('Count must be a positive whole number.');
+      requirement.count = count;
+      persistState();
+      renderAllTabs();
+    });
+  });
+  document.querySelectorAll('.edit-itemtemplate-button').forEach((button) => {
+    button.addEventListener('click', () => {
+      const template = state.itemTemplates[button.dataset.templateId];
+      const name = promptText('Item template name', template.name);
+      if (name === null || !name) return;
+      const description = promptText('Item template description', template.description);
+      if (description === null) return;
+      template.name = name;
+      template.description = description;
+      persistState();
+      renderAllTabs();
+    });
+  });
+  document.querySelectorAll('.delete-itemtemplate-button').forEach((button) => {
+    button.addEventListener('click', () => {
+      const template = state.itemTemplates[button.dataset.templateId];
+      if (confirmDelete(`item template “${template.name}”`)) {
+        deleteItemTemplate(template.id);
+        renderAllTabs();
+      }
+    });
+  });
 
   const partContainer = document.getElementById('design-item-parts');
   if (partContainer) {
@@ -335,7 +459,7 @@ function renderItemTemplatesDefinitions() {
         <div class="part-type-row">
           <select id="design-item-required-select">
             <option value="">Select required part type...</option>
-            ${partTypes.map((partType) => `<option value="${partType.id}">${partType.name}</option>`).join('')}
+            ${partTypes.map((partType) => `<option value="${partType.id}">${escapeHtml(partType.name)}</option>`).join('')}
           </select>
           <button id="design-add-required-button" class="btn btn-secondary">Add Required Part</button>
         </div>
@@ -345,7 +469,7 @@ function renderItemTemplatesDefinitions() {
         <div class="part-type-row">
           <select id="design-item-optional-select">
             <option value="">Select optional part type...</option>
-            ${partTypes.map((partType) => `<option value="${partType.id}">${partType.name}</option>`).join('')}
+            ${partTypes.map((partType) => `<option value="${partType.id}">${escapeHtml(partType.name)}</option>`).join('')}
           </select>
           <button id="design-add-optional-button" class="btn btn-secondary">Add Optional Part</button>
         </div>
@@ -363,7 +487,9 @@ function renderItemTemplatesDefinitions() {
       if (!template) {
         template = createItemTemplate(templateName, document.getElementById('design-item-description').value || '');
       }
-      template.requirePart(state.partTypes[partTypeId]);
+      const count = Number(promptText('How many required slots?', '1'));
+      if (!Number.isInteger(count) || count < 1) return alert('Count must be a positive whole number.');
+      template.requirePart(state.partTypes[partTypeId], count);
       document.getElementById('design-item-required-select').value = '';
       renderAllTabs();
     });
@@ -379,11 +505,14 @@ function renderItemTemplatesDefinitions() {
       if (!template) {
         template = createItemTemplate(templateName, document.getElementById('design-item-description').value || '');
       }
-      template.electivePart(state.partTypes[partTypeId]);
+      const count = Number(promptText('How many optional slots?', '1'));
+      if (!Number.isInteger(count) || count < 1) return alert('Count must be a positive whole number.');
+      template.electivePart(state.partTypes[partTypeId], count);
       document.getElementById('design-item-optional-select').value = '';
       renderAllTabs();
     });
   }
+  bindSystemDataInputs(container);
 }
 
 document.addEventListener('DOMContentLoaded', () => {
@@ -399,21 +528,13 @@ document.addEventListener('DOMContentLoaded', () => {
           return;
         }
 
-        const template = createItemTemplate(name, description);
-
-        document.querySelectorAll('#design-item-required .design-item-parttype-select').forEach((select) => {
-          const partTypeId = select.value;
-          if (partTypeId) {
-            template.requirePart(state.partTypes[partTypeId]);
-          }
-        });
-
-        document.querySelectorAll('#design-item-optional .design-item-parttype-select').forEach((select) => {
-          const partTypeId = select.value;
-          if (partTypeId) {
-            template.electivePart(state.partTypes[partTypeId]);
-          }
-        });
+        const existing = Object.values(state.itemTemplates).find((template) => template.name === name);
+        if (existing) {
+          existing.description = description;
+          persistState();
+        } else {
+          createItemTemplate(name, description);
+        }
 
         document.getElementById('design-item-name').value = '';
         document.getElementById('design-item-description').value = '';
@@ -450,13 +571,13 @@ function renderMaterialsList() {
       const compositionEntries = material.getCompositionEntries(state.substances);
 
       const compositionHtml = Object.entries(composition)
-        .map(([name, volume]) => `<div class="comp-item">${name}: ${volume.toFixed(1)} cm\u00b3</div>`)
+        .map(([name, volume]) => `<div class="comp-item">${escapeHtml(name)}: ${volume.toFixed(1)} cm\u00b3</div>`)
         .join('');
 
       const volumeControls = compositionEntries
         .map((entry) => `
           <div class="material-volume-row">
-            <span>${entry.substanceName}${entry.isJunk ? ' (Junk)' : ''}</span>
+            <span>${escapeHtml(entry.substanceName)}${entry.isJunk ? ' (Junk)' : ''}</span>
             <input type="number" min="0" step="0.1" value="${entry.volumeCm3.toFixed(1)}" data-material-id="${material.id}" data-substance-id="${entry.substanceId}" data-is-junk="${entry.isJunk}" class="material-substance-volume" />
           </div>
         `)
@@ -465,7 +586,7 @@ function renderMaterialsList() {
       return `
         <div class="material-card">
           <div class="material-header">
-            <h4>${material.name}</h4>
+            <h4>${escapeHtml(material.name)}</h4>
             <span class="material-id">${material.id.substr(0, 12)}</span>
           </div>
           <div class="material-body">
@@ -486,6 +607,9 @@ function renderMaterialsList() {
               <div style="display: flex; gap: 8px; margin-top: 8px; flex-wrap: wrap;">
                 <button class="btn btn-secondary resize-material-button" data-material-id="${material.id}">Resize Batch</button>
                 <button class="btn btn-secondary update-material-composition-button" data-material-id="${material.id}">Apply Substance Volumes</button>
+                <button class="btn btn-secondary add-material-substance-button" data-material-id="${material.id}">Add Constituent</button>
+                <button class="btn btn-secondary rename-material-button" data-material-id="${material.id}">Rename</button>
+                <button class="btn btn-danger delete-material-button" data-material-id="${material.id}">Delete</button>
               </div>
             </div>
           </div>
@@ -522,6 +646,42 @@ function renderMaterialsList() {
         }
       });
       renderAllTabs();
+    });
+  });
+  document.querySelectorAll('.rename-material-button').forEach((button) => {
+    button.addEventListener('click', () => {
+      const material = state.materials[button.dataset.materialId];
+      const name = promptText('Material batch name', material.name);
+      if (name === null || !name) return;
+      material.name = name;
+      persistState();
+      renderAllTabs();
+    });
+  });
+  document.querySelectorAll('.add-material-substance-button').forEach((button) => {
+    button.addEventListener('click', () => {
+      const material = state.materials[button.dataset.materialId];
+      const substanceName = promptText(`Substance (${Object.values(state.substances).map((substance) => substance.name).join(', ')})`, '');
+      if (substanceName === null || !substanceName) return;
+      const substance = Object.values(state.substances).find((entry) => entry.name.toLowerCase() === substanceName.toLowerCase());
+      if (!substance) return alert('No substance has that name.');
+      const volumeText = promptText('Volume to add (cm³)', '10');
+      if (volumeText === null) return;
+      const volume = Number(volumeText);
+      if (!Number.isFinite(volume) || volume <= 0) return alert('Volume must be greater than zero.');
+      const isJunk = confirm('Mark this constituent as junk?');
+      if (isJunk) material.addJunk(substance, volume);
+      else material.addSubstance(substance, volume);
+      renderAllTabs();
+    });
+  });
+  document.querySelectorAll('.delete-material-button').forEach((button) => {
+    button.addEventListener('click', () => {
+      const material = state.materials[button.dataset.materialId];
+      if (confirmDelete(`material batch “${material.name}”`)) {
+        deleteMaterial(material.id);
+        renderAllTabs();
+      }
     });
   });
 }
@@ -562,7 +722,7 @@ function updateRefinePanel() {
           <div class="junk-item">
             <label>
               <input type="checkbox" class="junk-checkbox" data-material-id="${materialId}" data-substance-id="${substanceId}" ${isJunk ? 'checked' : ''} />
-              ${substance ? substance.name : 'Unknown'}${isJunk ? ' (Junk)' : ''}: ${volume.toFixed(1)} cm\u00b3
+              ${escapeHtml(substance ? substance.name : 'Unknown')}${isJunk ? ' (Junk)' : ''}: ${volume.toFixed(1)} cm\u00b3
             </label>
           </div>
         `;
@@ -578,7 +738,7 @@ function updateRefinePanel() {
     if (!materialId) return;
 
     const material = state.materials[materialId];
-    const percent = parseFloat(document.getElementById('refine-junk-percent').value) || 100;
+    const percent = Math.min(100, Math.max(0, parseFloat(document.getElementById('refine-junk-percent').value) || 100));
     const checkboxes = document.querySelectorAll('.junk-checkbox:checked');
     const selectedSubstances = Array.from(checkboxes).map((checkbox) => checkbox.dataset.substanceId);
 
@@ -596,7 +756,7 @@ function updateRefinePanel() {
 
     const output = document.getElementById('refine-output');
     if (separatedBatch) {
-      output.innerHTML = `<p class="success">Separated ${totalRemoved.toFixed(1)} cm\u00b3 from ${material.name} into ${separatedBatch.name}.</p>`;
+      output.innerHTML = `<p class="success">Separated ${totalRemoved.toFixed(1)} cm\u00b3 from ${escapeHtml(material.name)} into ${escapeHtml(separatedBatch.name)}.</p>`;
     } else {
       output.innerHTML = '<p class="empty">No material was separated.</p>';
     }
@@ -662,9 +822,12 @@ document.addEventListener('DOMContentLoaded', () => {
         }
 
         const substance = state.substances[substanceId];
-        newMaterialBuffer.addSubstance(substance, volume);
+        const isJunk = document.getElementById('substance-is-junk').checked;
+        if (isJunk) newMaterialBuffer.addJunk(substance, volume);
+        else newMaterialBuffer.addSubstance(substance, volume);
 
         document.getElementById('substance-volume').value = '';
+        document.getElementById('substance-is-junk').checked = false;
         updateNewMaterialPreview();
       });
     }
@@ -684,7 +847,7 @@ function updateNewMaterialPreview() {
   const totalMass = newMaterialBuffer.getTotalMassGrams(state.substances);
 
   const compositionHtml = Object.entries(composition)
-    .map(([name, volume]) => `<div>${name}: ${volume.toFixed(1)} cm\u00b3</div>`)
+    .map(([name, volume]) => `<div>${escapeHtml(name)}: ${volume.toFixed(1)} cm\u00b3</div>`)
     .join('');
 
   preview.innerHTML = `
@@ -765,55 +928,24 @@ function renderCraftingTab() {
   renderCraftingInventorySummaries();
 }
 
-function getMaterialStats(material) {
-  const stats = {};
-  Object.values(state.stats).forEach((stat) => {
-    stats[stat.id] = 0;
-  });
-
-  Object.entries(material.substances).forEach(([substanceId, volumeCm3]) => {
-    const substance = state.substances[substanceId];
-    if (!substance) return;
-
-    Object.values(state.stats).forEach((stat) => {
-      const statPerCm3 = substance.statsPerCm3[stat.id] || 0;
-      stats[stat.id] += statPerCm3 * volumeCm3;
-    });
-  });
-
-  return stats;
-}
-
-function getPreviewPartStats(materialId, templateId) {
+function getPreviewPartSystems(materialId, templateId) {
   const material = state.materials[materialId];
   const template = state.partTemplates[templateId];
-  if (!material || !template) return { consumed: 0, partStats: {}, type: '', materialName: '' };
+  if (!material || !template) return { consumed: 0, part: null };
 
   const availableVolume = material.getUsableVolumeCm3();
   const consumed = Math.min(template.volumeCm3, availableVolume);
   const ratio = availableVolume > 0 ? consumed / availableVolume : 0;
-  const partStats = {};
-
-  Object.values(state.stats).forEach((stat) => {
-    partStats[stat.id] = 0;
-  });
-
-  Object.entries(material.substances).forEach(([substanceId, volumeCm3]) => {
-    const substance = state.substances[substanceId];
-    if (!substance) return;
-
-    Object.values(state.stats).forEach((stat) => {
-      const statPerCm3 = substance.statsPerCm3[stat.id] || 0;
-      partStats[stat.id] += statPerCm3 * volumeCm3 * ratio;
-    });
-  });
-
-  return { consumed, partStats, type: template.partType.name, materialName: material.name };
+  const previewMaterial = new Material(`${material.name} preview`);
+  previewMaterial.substances = Object.fromEntries(Object.entries(material.substances).map(([id, volume]) => [id, volume * ratio]));
+  return { consumed, part: new Part('Preview', template, previewMaterial) };
 }
 
 function updateCraftMaterialSelect() {
   const select = document.getElementById('craft-material-select');
+  const systemsDiv = document.getElementById('craft-material-systems');
   select.innerHTML = '<option value="">Select material for crafting...</option>';
+  systemsDiv.innerHTML = '<p class="empty">Select a source material to inspect its composition and calculated systems.</p>';
 
   Object.entries(state.materials).forEach(([id, material]) => {
     const option = document.createElement('option');
@@ -825,39 +957,54 @@ function updateCraftMaterialSelect() {
   select.onchange = (e) => {
     const materialId = e.target.value;
     const material = state.materials[materialId];
-    const statsDiv = document.getElementById('craft-material-stats');
-
     if (!material) {
-      statsDiv.innerHTML = '';
+      systemsDiv.innerHTML = '<p class="empty">Select a source material to inspect its composition and calculated systems.</p>';
       return;
     }
 
-    const stats = getMaterialStats(material);
-    const statsHtml = Object.entries(stats)
-      .map(([statId, value]) => {
-        const stat = state.stats[statId];
-        return `<div class="stat-item"><span>${stat.name}:</span> <strong>${value.toFixed(2)}</strong></div>`;
+    const systemsHtml = visibleSystemsHtml(material, true);
+
+    const totalVolume = material.getTotalVolumeCm3();
+    const usableVolume = material.getUsableVolumeCm3();
+    const junkVolume = material.getJunkVolumeCm3();
+    const compositionHtml = material.getCompositionEntries(state.substances)
+      .map((entry) => {
+        const percent = totalVolume > 0 ? (entry.volumeCm3 / totalVolume) * 100 : 0;
+        return `<div class="source-composition-row"><span>${escapeHtml(entry.substanceName)}${entry.isJunk ? ' (Junk)' : ''}</span><strong>${entry.volumeCm3.toFixed(1)} cm³ · ${percent.toFixed(1)}%</strong></div>`;
       })
       .join('');
 
-    statsDiv.innerHTML = `<div class="stats-display">${statsHtml}</div>`;
+    systemsDiv.innerHTML = `
+      <div class="source-material-card">
+        <h4>${escapeHtml(material.name)}</h4>
+        <div class="source-material-summary">
+          <span>Total: <strong>${totalVolume.toFixed(1)} cm³</strong></span>
+          <span>Usable: <strong>${usableVolume.toFixed(1)} cm³</strong></span>
+          <span>Junk: <strong>${junkVolume.toFixed(1)} cm³</strong></span>
+          <span>Mass: <strong>${material.getTotalMassGrams(state.substances).toFixed(1)}g</strong></span>
+        </div>
+        <div class="source-composition"><strong>Composition</strong>${compositionHtml || '<p class="empty">No constituents</p>'}</div>
+        <div class="calculation-display">
+          <h4>Calculated Systems</h4>
+          ${systemsHtml}
+        </div>
+      </div>
+    `;
 
     const templateId = document.getElementById('craft-template-select').value;
     if (templateId) {
-      const preview = getPreviewPartStats(materialId, templateId);
-      const previewStats = Object.entries(preview.partStats)
-        .map(([statId, value]) => `<div class="stat-item"><span>${state.stats[statId]?.name || 'Stat'}:</span> <strong>${value.toFixed(2)}</strong></div>`)
-        .join('');
+      const preview = getPreviewPartSystems(materialId, templateId);
+      const previewSystems = preview.part ? visibleSystemsHtml(preview.part) : '<p class="empty">No preview available.</p>';
 
       const infoDiv = document.getElementById('template-info');
       infoDiv.innerHTML = `
         <div class="template-card">
-          <div><strong>${state.partTemplates[templateId].name}</strong></div>
-          <div>Type: ${state.partTemplates[templateId].partType.name}</div>
+          <div><strong>${escapeHtml(state.partTemplates[templateId].name)}</strong></div>
+          <div>Type: ${escapeHtml(state.partTemplates[templateId].partType.name)}</div>
           <div>Material consumed: ${preview.consumed.toFixed(1)} cm³</div>
           <div>Volume required: ${state.partTemplates[templateId].volumeCm3} cm³</div>
-          <div style="font-size: 0.9em; color: #666; margin-top: 4px;">${state.partTemplates[templateId].description}</div>
-          <div class="stats-display" style="margin-top: 8px;">${previewStats}</div>
+          <div style="font-size: 0.9em; color: #666; margin-top: 4px;">${escapeHtml(state.partTemplates[templateId].description)}</div>
+          <div class="calculation-display" style="margin-top: 8px;">${previewSystems}</div>
         </div>
       `;
     }
@@ -887,28 +1034,26 @@ function updateCraftTemplateSelect() {
     }
 
     if (materialId) {
-      const preview = getPreviewPartStats(materialId, templateId);
-      const previewStats = Object.entries(preview.partStats)
-        .map(([statId, value]) => `<div class="stat-item"><span>${state.stats[statId]?.name || 'Stat'}:</span> <strong>${value.toFixed(2)}</strong></div>`)
-        .join('');
+      const preview = getPreviewPartSystems(materialId, templateId);
+      const previewSystems = preview.part ? visibleSystemsHtml(preview.part) : '<p class="empty">No preview available.</p>';
 
       infoDiv.innerHTML = `
         <div class="template-card">
-          <div><strong>${template.name}</strong></div>
-          <div>Type: ${template.partType.name}</div>
+          <div><strong>${escapeHtml(template.name)}</strong></div>
+          <div>Type: ${escapeHtml(template.partType.name)}</div>
           <div>Material consumed: ${preview.consumed.toFixed(1)} cm³</div>
           <div>Volume required: ${template.volumeCm3} cm\u00b3</div>
-          <div style="font-size: 0.9em; color: #666; margin-top: 4px;">${template.description}</div>
-          <div class="stats-display" style="margin-top: 8px;">${previewStats}</div>
+          <div style="font-size: 0.9em; color: #666; margin-top: 4px;">${escapeHtml(template.description)}</div>
+          <div class="calculation-display" style="margin-top: 8px;">${previewSystems}</div>
         </div>
       `;
     } else {
       infoDiv.innerHTML = `
         <div class="template-card">
-          <div><strong>${template.name}</strong></div>
-          <div>Type: ${template.partType.name}</div>
+          <div><strong>${escapeHtml(template.name)}</strong></div>
+          <div>Type: ${escapeHtml(template.partType.name)}</div>
           <div>Volume Required: ${template.volumeCm3} cm\u00b3</div>
-          <div style="font-size: 0.9em; color: #666; margin-top: 4px;">${template.description}</div>
+          <div style="font-size: 0.9em; color: #666; margin-top: 4px;">${escapeHtml(template.description)}</div>
         </div>
       `;
     }
@@ -922,17 +1067,17 @@ function renderCraftingInventorySummaries() {
 
   if (partsEl) {
     const parts = Object.values(state.parts);
-    partsEl.innerHTML = parts.length ? parts.map((part) => `<div class="mini-inventory-card">${part.name} (${part.template.partType.name})</div>`).join('') : '<p class="empty">No parts in inventory</p>';
+    partsEl.innerHTML = parts.length ? parts.map((part) => `<div class="mini-inventory-card">${escapeHtml(part.name)} (${escapeHtml(part.template.partType.name)})${part.usedInItemId ? ' — assembled' : ''}</div>`).join('') : '<p class="empty">No parts in inventory</p>';
   }
 
   if (itemsEl) {
     const items = Object.values(state.items);
-    itemsEl.innerHTML = items.length ? items.map((item) => `<div class="mini-inventory-card">${item.name}</div>`).join('') : '<p class="empty">No items in inventory</p>';
+    itemsEl.innerHTML = items.length ? items.map((item) => `<div class="mini-inventory-card">${escapeHtml(item.name)}</div>`).join('') : '<p class="empty">No items in inventory</p>';
   }
 
   if (itemPartsEl) {
-    const parts = Object.values(state.parts);
-    itemPartsEl.innerHTML = parts.length ? parts.map((part) => `<div class="mini-inventory-card">${part.name} • ${part.template.name}</div>`).join('') : '<p class="empty">No parts available for item assembly</p>';
+    const parts = Object.values(state.parts).filter((part) => !part.usedInItemId);
+    itemPartsEl.innerHTML = parts.length ? parts.map((part) => `<div class="mini-inventory-card">${escapeHtml(part.name)} • ${escapeHtml(part.template.name)}</div>`).join('') : '<p class="empty">No parts available for item assembly</p>';
   }
 }
 
@@ -952,7 +1097,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
         const material = state.materials[materialId];
         const template = state.partTemplates[templateId];
-        const preview = getPreviewPartStats(materialId, templateId);
+        const preview = getPreviewPartSystems(materialId, templateId);
 
         if (preview.consumed <= 0 || !material || material.getUsableVolumeCm3() < template.volumeCm3) {
           alert('Not enough usable material to craft that part.');
@@ -967,17 +1112,15 @@ document.addEventListener('DOMContentLoaded', () => {
         }
 
         const output = document.getElementById('part-created-output');
-        const partStats = Object.entries(preview.partStats)
-          .map(([statId, value]) => `${state.stats[statId]?.name || 'Stat'}: ${value.toFixed(2)}`)
-          .join(' • ');
+        const partSystems = preview.part ? visibleSystemsHtml(preview.part) : '<p class="empty">No calculated system output.</p>';
 
         output.innerHTML = `
           <div class="success">
-            <strong>✓ Part Created: ${resolvedPartName}</strong><br>
-            Template: ${template.name}<br>
+            <strong>✓ Part Created: ${escapeHtml(resolvedPartName)}</strong><br>
+            Template: ${escapeHtml(template.name)}<br>
             Material consumed: ${preview.consumed.toFixed(1)} cm³<br>
-            Type: ${template.partType.name}<br>
-            Stats: ${partStats}
+            Type: ${escapeHtml(template.partType.name)}<br>
+            <div class="calculation-display">${partSystems}</div>
           </div>
         `;
 
@@ -1007,7 +1150,7 @@ function updateAssembleTemplateSelect() {
     select.appendChild(option);
   });
 
-  select.addEventListener('change', (e) => {
+  select.onchange = (e) => {
     const templateId = e.target.value;
     const template = state.itemTemplates[templateId];
     const infoDiv = document.getElementById('assemble-template-info');
@@ -1019,14 +1162,14 @@ function updateAssembleTemplateSelect() {
     }
 
     const requiredHtml = template.requiredParts
-      .map((req) => `<li>${req.partType.name} (required)</li>`)
+      .map((req) => `<li>${escapeHtml(req.partType.name)} × ${req.count || 1} (required)</li>`)
       .join('');
-    const electiveHtml = template.electiveParts.map((elec) => `<li>${elec.partType.name} (optional)</li>`).join('');
+    const electiveHtml = template.electiveParts.map((elec) => `<li>${escapeHtml(elec.partType.name)} × ${elec.count || 1} (optional)</li>`).join('');
 
     infoDiv.innerHTML = `
       <div class="template-card">
-        <div><strong>${template.name}</strong></div>
-        <div>${template.description}</div>
+        <div><strong>${escapeHtml(template.name)}</strong></div>
+        <div>${escapeHtml(template.description)}</div>
         <div style="margin-top: 8px;">
           <strong>Parts Required:</strong>
           <ul style="margin: 4px 0 0 20px;">${requiredHtml}${electiveHtml}</ul>
@@ -1035,29 +1178,29 @@ function updateAssembleTemplateSelect() {
     `;
 
     renderPartSlots(template);
-  });
+  };
 }
 
 function renderPartSlots(template) {
   const slotsDiv = document.getElementById('part-slots');
-  const allSlots = [
-    ...template.requiredParts.map((entry) => ({ ...entry, required: true })),
-    ...template.electiveParts.map((entry) => ({ ...entry, required: false })),
-  ];
+  const expandSlots = (entries, required) => entries.flatMap((entry) =>
+    Array.from({ length: entry.count || 1 }, (_, index) => ({ ...entry, required, ordinal: index + 1 }))
+  );
+  const allSlots = [...expandSlots(template.requiredParts, true), ...expandSlots(template.electiveParts, false)];
 
   const slots = allSlots
     .map((slot, index) => {
       const compatibleParts = Object.values(state.parts).filter(
-        (part) => part.template.partType.id === slot.partType.id
+        (part) => part.template.partType.id === slot.partType.id && !part.usedInItemId
       );
 
       const optionsHtml = compatibleParts
-        .map((part) => `<option value="${part.id}">${part.name}</option>`)
+        .map((part) => `<option value="${part.id}">${escapeHtml(part.name)}</option>`)
         .join('');
 
       return `
         <div class="slot">
-          <label>${slot.partType.name}${slot.required ? '' : ' (optional)'}</label>
+          <label>${escapeHtml(slot.partType.name)} ${slot.ordinal}${slot.required ? ' (required)' : ' (optional)'}</label>
           <select class="part-slot-select" data-slot-index="${index}">
             <option value="">-- Select Part --</option>
             ${optionsHtml}
@@ -1084,27 +1227,20 @@ document.addEventListener('DOMContentLoaded', () => {
         }
 
         const template = state.itemTemplates[templateId];
-        const item = createItem(itemName, template);
-
-        const slots = document.querySelectorAll('.part-slot-select');
-        let partCount = 0;
-
-        slots.forEach((slot) => {
-          const partId = slot.value;
-          if (partId) {
-            const part = state.parts[partId];
-            if (part) {
-              item.addPart(part);
-              partCount++;
-            }
-          }
-        });
+        const parts = Array.from(document.querySelectorAll('.part-slot-select'))
+          .map((slot) => state.parts[slot.value])
+          .filter(Boolean);
+        const result = assembleItem(itemName, template, parts);
+        if (!result.valid) {
+          alert(result.message);
+          return;
+        }
 
         const output = document.getElementById('item-created-output');
         output.innerHTML = `
           <div class="success">
-            <strong>\u2713 Item Created: ${itemName}</strong><br>
-            Parts Used: ${partCount}
+            <strong>\u2713 Item Created: ${escapeHtml(itemName)}</strong><br>
+            Parts Used: ${parts.length}
           </div>
         `;
 
@@ -1137,31 +1273,68 @@ function renderPartsList() {
 
   container.innerHTML = parts
     .map((part) => {
-      const stats = part.getStats(state.substances, state.stats);
       const totalMass = part.material.getTotalMassGrams(state.substances);
-
-      const statsHtml = Object.entries(stats)
-        .map(([statId, value]) => {
-          const stat = state.stats[statId];
-          return `<div class="stat-item"><span>${stat.name}:</span> ${value.toFixed(2)}</div>`;
-        })
-        .join('');
+      const systemsHtml = visibleSystemsHtml(part);
 
       return `
         <div class="inventory-card">
           <div class="card-header">
-            <h4>${part.name}</h4>
-            <span class="type-badge">${part.template.partType.name}</span>
+            <h4>${escapeHtml(part.name)}</h4>
+            <span class="type-badge">${escapeHtml(part.template.partType.name)}</span>
           </div>
           <div class="card-body">
-            <div>Template: ${part.template.name}</div>
+            <div>Template: ${escapeHtml(part.template.name)}</div>
             <div>Mass: ${totalMass.toFixed(0)}g</div>
-            <div class="stats-display">${statsHtml}</div>
+            <div>Status: ${part.usedInItemId ? `Assembled into ${escapeHtml(state.items[part.usedInItemId]?.name || 'an item')}` : 'Available'}</div>
+            <div class="calculation-display">${systemsHtml}</div>
+            <button class="btn btn-secondary edit-part-button" data-part-id="${part.id}">Edit</button>
+            <button class="btn btn-danger delete-part-button" data-part-id="${part.id}">Delete</button>
           </div>
         </div>
       `;
     })
     .join('');
+
+  document.querySelectorAll('.edit-part-button').forEach((button) => {
+    button.addEventListener('click', () => {
+      const part = state.parts[button.dataset.partId];
+      const name = promptText('Part name', part.name);
+      if (name === null || !name) return;
+      const templateName = promptText(`Part template (${Object.values(state.partTemplates).map((template) => template.name).join(', ')})`, part.template.name);
+      if (templateName === null) return;
+      const template = Object.values(state.partTemplates).find((entry) => entry.name.toLowerCase() === templateName.toLowerCase());
+      if (!template) return alert('No part template has that name.');
+      const previousTemplate = part.template;
+      part.name = name;
+      part.template = template;
+      if (part.usedInItemId) {
+        const owner = state.items[part.usedInItemId];
+        const validation = validateItemParts(owner.template, owner.parts, owner.id);
+        if (!validation.valid) {
+          part.template = previousTemplate;
+          return alert(`That template would invalidate ${owner.name}: ${validation.message}`);
+        }
+      }
+      Object.values(state.substances).forEach((substance) => {
+        const current = part.material.substances[substance.id] ?? '';
+        const volumeText = promptText(`${substance.name} usable volume in this part (cm³; blank removes)`, current);
+        if (volumeText === null) return;
+        if (volumeText === '') delete part.material.substances[substance.id];
+        else if (Number.isFinite(Number(volumeText)) && Number(volumeText) >= 0) part.material.substances[substance.id] = Number(volumeText);
+      });
+      persistState();
+      renderAllTabs();
+    });
+  });
+  document.querySelectorAll('.delete-part-button').forEach((button) => {
+    button.addEventListener('click', () => {
+      const part = state.parts[button.dataset.partId];
+      if (confirmDelete(`part “${part.name}”`)) {
+        deletePart(part.id);
+        renderAllTabs();
+      }
+    });
+  });
 }
 
 function renderItemsList() {
@@ -1175,37 +1348,60 @@ function renderItemsList() {
 
   container.innerHTML = items
     .map((item) => {
-      const stats = item.getStats(state.substances, state.stats);
       let totalMass = 0;
       item.parts.forEach((part) => {
         totalMass += part.material.getTotalMassGrams(state.substances);
       });
 
-      const statsHtml = Object.entries(stats)
-        .map(([statId, value]) => {
-          const stat = state.stats[statId];
-          return `<div class="stat-item"><span>${stat.name}:</span> ${value.toFixed(2)}</div>`;
-        })
-        .join('');
+      const systemsHtml = visibleSystemsHtml(item);
 
-      const partsList = item.parts.map((part) => `<li>${part.name}</li>`).join('');
+      const partsList = item.parts.map((part) => `<li>${escapeHtml(part.name)}</li>`).join('');
 
       return `
         <div class="inventory-card">
           <div class="card-header">
-            <h4>${item.name}</h4>
-            <span class="type-badge">${item.template.name}</span>
+            <h4>${escapeHtml(item.name)}</h4>
+            <span class="type-badge">${escapeHtml(item.template.name)}</span>
           </div>
           <div class="card-body">
             <div>Total Mass: ${totalMass.toFixed(0)}g</div>
             <strong>Components:</strong>
             <ul style="margin: 4px 0 0 20px;">${partsList}</ul>
-            <div class="stats-display" style="margin-top: 12px;">${statsHtml}</div>
+            <div class="calculation-display" style="margin-top: 12px;">${systemsHtml}</div>
+            <button class="btn btn-secondary edit-item-button" data-item-id="${item.id}">Edit</button>
+            <button class="btn btn-danger delete-item-button" data-item-id="${item.id}">Disassemble &amp; Delete</button>
           </div>
         </div>
       `;
     })
     .join('');
+
+  document.querySelectorAll('.edit-item-button').forEach((button) => {
+    button.addEventListener('click', () => {
+      const item = state.items[button.dataset.itemId];
+      const name = promptText('Item name', item.name);
+      if (name === null || !name) return;
+      const templateName = promptText(`Item template (${Object.values(state.itemTemplates).map((template) => template.name).join(', ')})`, item.template.name);
+      if (templateName === null) return;
+      const template = Object.values(state.itemTemplates).find((entry) => entry.name.toLowerCase() === templateName.toLowerCase());
+      if (!template) return alert('No item template has that name.');
+      const validation = validateItemParts(template, item.parts, item.id);
+      if (!validation.valid) return alert(`The existing parts do not fit that template: ${validation.message}`);
+      item.name = name;
+      item.template = template;
+      persistState();
+      renderAllTabs();
+    });
+  });
+  document.querySelectorAll('.delete-item-button').forEach((button) => {
+    button.addEventListener('click', () => {
+      const item = state.items[button.dataset.itemId];
+      if (confirm(`Disassemble and delete “${item.name}”? Its parts will become available again.`)) {
+        deleteItem(item.id);
+        renderAllTabs();
+      }
+    });
+  });
 }
 
 // ============================================================================
@@ -1216,27 +1412,129 @@ function renderSystemsTab() {
   renderSystemsList();
 }
 
+const TARGET_LABELS = { substance: 'Substances', partType: 'Part Types', partTemplate: 'Part Templates', itemTemplate: 'Item Templates' };
+
+function renderCentralSystemData(system) {
+  const sections = SYSTEM_TARGETS.filter((target) => system.targets[target]).map((target) => {
+    const entities = Object.values(getTargetCollection(target));
+    return `
+      <div class="system-data-target">
+        <h5>${TARGET_LABELS[target]}</h5>
+        ${entities.map((entity) => `<div class="central-entity-data"><h6>${escapeHtml(entity.name)}</h6>${renderEntitySystemData(entity, target, system.id)}</div>`).join('') || '<p class="empty">No definitions of this type exist.</p>'}
+      </div>`;
+  });
+  return sections.join('') || '<p class="empty">Select at least one attachment target to edit system data.</p>';
+}
+
 function renderSystemsList() {
   const container = document.getElementById('systems-list');
   const systems = Object.values(state.systems);
 
-  if (systems.length === 0) {
-    container.innerHTML = '<p class="empty">No systems registered.</p>';
+  if (!systems.length) {
+    container.innerHTML = '<p class="empty">No systems registered. Create one below or reset to restore the defaults.</p>';
     return;
   }
 
-  container.innerHTML = systems
-    .map((system) => {
-      const componentCount = Object.keys(system.components).length;
-      return `
-        <div class="system-card">
-          <h4>${system.name}</h4>
-          <p>${system.description}</p>
-          <div class="component-count">Components: ${componentCount}</div>
+  container.innerHTML = systems.map((system) => `
+    <div class="system-editor" data-system-id="${system.id}">
+      <div class="system-editor-header">
+        <div><h3>${escapeHtml(system.name)}</h3><p>${escapeHtml(system.description || 'No description')}</p></div>
+        <span class="type-badge">${system.processorId === 'volume' ? 'Volume-scaled' : 'Flat'}</span>
+      </div>
+      <div class="system-actions">
+        <button class="btn btn-secondary edit-system-button">Edit System</button>
+        <button class="btn btn-danger delete-system-button">Delete System</button>
+      </div>
+
+      <div class="system-config-grid">
+        <div>
+          <h4>Attachment Targets</h4>
+          ${SYSTEM_TARGETS.map((target) => `<label class="system-toggle"><input class="system-target-toggle" type="checkbox" data-target="${target}" ${system.targets[target] ? 'checked' : ''}> ${TARGET_LABELS[target]}</label>`).join('')}
+          <p class="field-help">Unchecked target data is preserved but hidden and ignored.</p>
         </div>
-      `;
-    })
-    .join('');
+        <div>
+          <h4>Rules</h4>
+          <label class="system-toggle">Processor
+            <select class="system-processor-select">
+              <option value="flat" ${system.processorId === 'flat' ? 'selected' : ''}>Flat amount</option>
+              <option value="volume" ${system.processorId === 'volume' ? 'selected' : ''}>Linearly scaled by volume</option>
+            </select>
+          </label>
+          <label class="system-toggle"><input class="system-behavior-toggle" type="checkbox" data-behavior="inherit" ${system.behaviors.inherit ? 'checked' : ''}> Live inheritance</label>
+          <label class="system-toggle"><input class="system-behavior-toggle" type="checkbox" data-behavior="addNumeric" ${system.behaviors.addNumeric ? 'checked' : ''}> Add numeric fields</label>
+          <label class="system-toggle"><input class="system-calculation-toggle" type="checkbox" ${system.showInCalculations ? 'checked' : ''}> Show in crafting calculations</label>
+        </div>
+      </div>
+
+      <div class="system-schema-grid">
+        <div>
+          <div class="system-subheading"><h4>Fields</h4><button class="btn btn-secondary add-system-field">Add Field</button></div>
+          ${Object.values(system.fields).map((field) => `
+            <div class="schema-row" data-field-id="${field.id}">
+              <div><strong>${escapeHtml(field.name)}</strong> <span class="type-badge">${field.type}</span>
+                ${field.type === 'choice' ? `<div class="choice-options">${field.options.map((option) => `<span>${escapeHtml(option.label)} <button class="edit-choice-option" data-option-id="${option.id}">edit</button><button class="delete-choice-option" data-option-id="${option.id}">×</button></span>`).join('')} <button class="add-choice-option">+ option</button></div>` : ''}
+              </div>
+              <div><button class="edit-system-field">Edit</button><button class="delete-system-field">Delete</button></div>
+            </div>`).join('') || '<p class="empty">No fields defined.</p>'}
+        </div>
+        <div>
+          <div class="system-subheading"><h4>Labels</h4><button class="btn btn-secondary add-system-label">Add Label</button></div>
+          ${Object.values(system.labels).map((label) => `<div class="schema-row" data-label-id="${label.id}"><div><strong>${escapeHtml(label.name)}</strong><small>${escapeHtml(label.description || '')}</small></div><div><button class="edit-system-label">Edit</button><button class="delete-system-label">Delete</button></div></div>`).join('') || '<p class="empty">No labels defined.</p>'}
+        </div>
+      </div>
+
+      <div class="central-system-data">
+        <h4>Attached Data</h4>
+        ${renderCentralSystemData(system)}
+      </div>
+    </div>
+  `).join('');
+
+  container.querySelectorAll('.system-editor').forEach((editor) => {
+    const system = state.systems[editor.dataset.systemId];
+    editor.querySelector('.edit-system-button').addEventListener('click', () => {
+      const name = promptText('System name', system.name); if (!name) return;
+      const description = promptText('System description', system.description); if (description === null) return;
+      system.name = name; system.description = description; persistState(); renderAllTabs();
+    });
+    editor.querySelector('.delete-system-button').addEventListener('click', () => {
+      if (confirmDelete(`system “${system.name}”`)) { deleteSystemDefinition(system.id); renderAllTabs(); }
+    });
+    editor.querySelectorAll('.system-target-toggle').forEach((input) => input.addEventListener('change', () => { system.targets[input.dataset.target] = input.checked; persistState(); renderAllTabs(); }));
+    editor.querySelector('.system-processor-select').addEventListener('change', (event) => { system.processorId = event.target.value === 'volume' ? 'volume' : 'flat'; persistState(); renderAllTabs(); });
+    editor.querySelectorAll('.system-behavior-toggle').forEach((input) => input.addEventListener('change', () => { system.behaviors[input.dataset.behavior] = input.checked; persistState(); renderAllTabs(); }));
+    editor.querySelector('.system-calculation-toggle').addEventListener('change', (event) => { system.showInCalculations = event.target.checked; persistState(); renderAllTabs(); });
+
+    editor.querySelector('.add-system-field').addEventListener('click', () => {
+      const name = promptText('Field name', 'Value'); if (!name) return;
+      const type = promptText('Field type: number, text, boolean, or choice', 'text'); if (!FIELD_TYPES.includes(type)) return alert('Unknown field type.');
+      const options = type === 'choice' ? (promptText('Choice options, comma separated', '') || '').split(',').map((value) => value.trim()).filter(Boolean) : [];
+      system.addField(name, type, options); renderAllTabs();
+    });
+    editor.querySelectorAll('.schema-row[data-field-id]').forEach((row) => {
+      const field = system.fields[row.dataset.fieldId];
+      row.querySelector('.edit-system-field').addEventListener('click', () => {
+        const name = promptText('Field name', field.name); if (!name) return;
+        const type = promptText('Field type: number, text, boolean, or choice', field.type); if (!FIELD_TYPES.includes(type)) return alert('Unknown field type.');
+        field.name = name;
+        if (type !== field.type && confirm('Changing type clears all values stored for this field. Continue?')) changeSystemFieldType(system.id, field.id, type, type === 'choice' ? (promptText('Choice options, comma separated', '') || '').split(',').map((value) => value.trim()).filter(Boolean) : []);
+        else persistState();
+        renderAllTabs();
+      });
+      row.querySelector('.delete-system-field').addEventListener('click', () => { if (confirmDelete(`field “${field.name}”`)) { deleteSystemField(system.id, field.id); renderAllTabs(); } });
+      row.querySelector('.add-choice-option')?.addEventListener('click', () => { const label = promptText('Option label', ''); if (!label) return; field.options.push({ id: generateId('option'), label }); persistState(); renderAllTabs(); });
+      row.querySelectorAll('.edit-choice-option').forEach((button) => button.addEventListener('click', () => { const option = field.options.find((entry) => entry.id === button.dataset.optionId); const label = promptText('Option label', option.label); if (!label) return; option.label = label; persistState(); renderAllTabs(); }));
+      row.querySelectorAll('.delete-choice-option').forEach((button) => button.addEventListener('click', () => { if (confirm('Delete this option and clear values that use it?')) { deleteChoiceOption(system.id, field.id, button.dataset.optionId); renderAllTabs(); } }));
+    });
+
+    editor.querySelector('.add-system-label').addEventListener('click', () => { const name = promptText('Label name', ''); if (!name) return; const description = promptText('Label description', '') ?? ''; system.addLabel(name, description); renderAllTabs(); });
+    editor.querySelectorAll('.schema-row[data-label-id]').forEach((row) => {
+      const label = system.labels[row.dataset.labelId];
+      row.querySelector('.edit-system-label').addEventListener('click', () => { const name = promptText('Label name', label.name); if (!name) return; const description = promptText('Label description', label.description); if (description === null) return; label.name = name; label.description = description; persistState(); renderAllTabs(); });
+      row.querySelector('.delete-system-label').addEventListener('click', () => { if (confirmDelete(`label “${label.name}”`)) { deleteSystemLabel(system.id, label.id); renderAllTabs(); } });
+    });
+  });
+  bindSystemDataInputs(container);
 }
 
 document.addEventListener('DOMContentLoaded', () => {
@@ -1252,12 +1550,13 @@ document.addEventListener('DOMContentLoaded', () => {
           return;
         }
 
-        createComponentSystem(name, description);
-
+        const processor = document.getElementById('system-processor').value;
+        const system = createSystemDefinition(name, description, processor);
         document.getElementById('system-name').value = '';
         document.getElementById('system-description').value = '';
+        document.getElementById('system-processor').value = 'flat';
 
-        renderSystemsTab();
+        renderAllTabs();
       });
     }
   }, 100);
@@ -1268,6 +1567,44 @@ document.addEventListener('DOMContentLoaded', () => {
 // ============================================================================
 
 document.addEventListener('DOMContentLoaded', () => {
+  document.getElementById('export-data-button')?.addEventListener('click', () => {
+    const blob = new Blob([exportCraftingData()], { type: 'application/json' });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.href = url;
+    link.download = `crafting-system-${new Date().toISOString().slice(0, 10)}.json`;
+    document.body.appendChild(link);
+    link.click();
+    link.remove();
+    URL.revokeObjectURL(url);
+  });
+
+  const importInput = document.getElementById('import-data-file');
+  document.getElementById('import-data-button')?.addEventListener('click', () => importInput?.click());
+  importInput?.addEventListener('change', async () => {
+    const file = importInput.files?.[0];
+    if (!file) return;
+    try {
+      if (!confirm('Import this crafting workspace? The imported data will replace all current local data.')) return;
+      importCraftingData(await file.text());
+      newMaterialBuffer = null;
+      renderAllTabs();
+      alert('Crafting data imported successfully.');
+    } catch (error) {
+      alert(`Import failed: ${error.message}`);
+    } finally {
+      importInput.value = '';
+    }
+  });
+
+  document.getElementById('reset-data-button')?.addEventListener('click', () => {
+    if (!confirm('Reset all crafting data? This permanently replaces the current browser data with the defaults.')) return;
+    newMaterialBuffer = null;
+    resetCraftingData();
+    renderAllTabs();
+    alert('Crafting data was reset to defaults.');
+  });
+
   const designButton = document.querySelector('.tab-button[data-tab="design"]');
   const designTab = document.getElementById('design-tab');
   if (designButton) designButton.classList.add('active');
