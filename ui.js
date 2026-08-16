@@ -18,7 +18,7 @@ function confirmDelete(label) {
 }
 
 function fieldInputHtml(entity, system, label, field) {
-  const value = entity.systemData?.[system.id]?.[label.id]?.[field.id];
+  const value = entity.systemData?.[system.id]?.values?.[label.id]?.[field.id];
   const attrs = `class="system-value-input" data-entity-target="${getEntityTarget(entity)}" data-entity-id="${entity.id}" data-system-id="${system.id}" data-label-id="${label.id}" data-field-id="${field.id}"`;
   if (field.type === 'boolean') return `<input type="checkbox" ${attrs} ${value === true ? 'checked' : ''}>`;
   if (field.type === 'choice') {
@@ -29,18 +29,37 @@ function fieldInputHtml(entity, system, label, field) {
   return `<input type="${type}" ${step} value="${escapeHtml(value ?? '')}" ${attrs}>`;
 }
 
+function constraintEntityDataHtml(entity, target, system) {
+  if (!system.capabilities.typeConstraints || !['substance', 'partType', 'partTemplate'].includes(target)) return '';
+  const envelope = getSystemDataEnvelope(entity, system.id);
+  const types = Object.values(system.types);
+  const editorAttrs = `data-entity-target="${target}" data-entity-id="${entity.id}" data-system-id="${system.id}"`;
+  if (target === 'substance') {
+    const selected = new Set(envelope?.typeMembership.typeIds || []);
+    return `<div class="constraint-editor" ${editorAttrs}><strong>Type Membership</strong><div class="constraint-type-options">${types.map((type) => `<label><input class="constraint-membership-type" type="checkbox" value="${type.id}" ${selected.has(type.id) ? 'checked' : ''}> ${escapeHtml(type.name)}</label>`).join('') || '<em>No types defined.</em>'}</div></div>`;
+  }
+  const rule = envelope?.allowRule || { enabled: false, allowedTypeIds: [], minimumCoveragePercent: null };
+  const allowed = new Set(rule.allowedTypeIds);
+  return `<div class="constraint-editor" ${editorAttrs}>
+    <label class="system-toggle"><input class="constraint-rule-enabled" type="checkbox" ${rule.enabled ? 'checked' : ''}> Enforce material allow-list</label>
+    <div class="constraint-type-options">${types.map((type) => `<label><input class="constraint-allowed-type" type="checkbox" value="${type.id}" ${allowed.has(type.id) ? 'checked' : ''}> ${escapeHtml(type.name)}</label>`).join('') || '<em>No types defined.</em>'}</div>
+    <label>Minimum coverage % <input class="constraint-threshold" type="number" min="0" max="100" step="0.1" value="${rule.minimumCoveragePercent ?? ''}" placeholder="Default: ${system.defaultCoveragePercent}"></label>
+  </div>`;
+}
+
 function renderEntitySystemData(entity, target, onlySystemId = null) {
   const systems = Object.values(state.systems).filter((system) => system.targets[target] && (!onlySystemId || system.id === onlySystemId));
   if (!systems.length) return '<p class="empty">No systems target this definition type.</p>';
   return systems.map((system) => `
     <div class="attached-system-card">
       <h5>${escapeHtml(system.name)}</h5>
+      ${constraintEntityDataHtml(entity, target, system)}
       ${Object.values(system.labels).map((label) => `
         <div class="attached-label-row">
           <strong>${escapeHtml(label.name)}</strong>
           ${Object.values(system.fields).map((field) => `<label>${escapeHtml(field.name)}${fieldInputHtml(entity, system, label, field)}</label>`).join('') || '<em>No fields defined</em>'}
         </div>
-      `).join('') || '<p class="empty">No labels defined.</p>'}
+      `).join('') || (!system.capabilities.typeConstraints ? '<p class="empty">No labels defined.</p>' : '')}
     </div>
   `).join('');
 }
@@ -53,6 +72,25 @@ function bindSystemDataInputs(container = document) {
       setSystemValue(entity, input.dataset.systemId, input.dataset.labelId, input.dataset.fieldId, value);
       renderAllTabs();
     });
+  });
+  container.querySelectorAll('.constraint-editor').forEach((editor) => {
+    const entity = getTargetCollection(editor.dataset.entityTarget)[editor.dataset.entityId];
+    const systemId = editor.dataset.systemId;
+    editor.querySelectorAll('.constraint-membership-type').forEach((input) => input.addEventListener('change', () => {
+      setTypeMembership(entity, systemId, [...editor.querySelectorAll('.constraint-membership-type:checked')].map((entry) => entry.value));
+      renderAllTabs();
+    }));
+    const updateRule = () => {
+      setAllowRule(entity, systemId, {
+        enabled: editor.querySelector('.constraint-rule-enabled')?.checked === true,
+        allowedTypeIds: [...editor.querySelectorAll('.constraint-allowed-type:checked')].map((entry) => entry.value),
+        minimumCoveragePercent: editor.querySelector('.constraint-threshold')?.value ?? null,
+      });
+      renderAllTabs();
+    };
+    editor.querySelector('.constraint-rule-enabled')?.addEventListener('change', updateRule);
+    editor.querySelectorAll('.constraint-allowed-type').forEach((input) => input.addEventListener('change', updateRule));
+    editor.querySelector('.constraint-threshold')?.addEventListener('change', updateRule);
   });
 }
 
@@ -92,6 +130,30 @@ function evaluationHtml(evaluation, showMaterialRate = false) {
 function visibleSystemsHtml(context, showMaterialRate = false) {
   const evaluations = evaluateVisibleSystems(context);
   return evaluations.length ? evaluations.map((evaluation) => evaluationHtml(evaluation, showMaterialRate)).join('') : '<p class="empty">No systems are opted into crafting calculations.</p>';
+}
+
+function constraintStatusHtml(context) {
+  const systems = getConstraintSystems();
+  if (!systems.length) return '';
+  const summaries = getDerivedTypeSummary(context).filter((summary) => summary.types.length);
+  const typeRows = summaries.map((summary) => `<div class="constraint-type-summary"><strong>${escapeHtml(summary.system.name)}:</strong> ${summary.types.map((type) => `<span class="type-badge">${escapeHtml(type.name)}</span>`).join(' ')}</div>`).join('');
+  let validation;
+  let coverageRows = '';
+  if (context instanceof Material) validation = validateMaterialConstraints(context);
+  else if (context instanceof Part) {
+    validation = validatePartConstraints(context.template, context.material);
+    coverageRows = validation.results.flatMap((result) => result.rules.map((rule) => {
+      const system = state.systems[rule.systemId];
+      const entity = getTargetCollection(rule.target)[rule.entityId];
+      return `<div class="constraint-coverage-row"><span>${escapeHtml(system?.name || 'Types')} · ${escapeHtml(entity?.name || rule.target)}</span><strong>${rule.coveragePercent.toFixed(1)}% / ${rule.requiredPercent.toFixed(1)}%</strong></div>`;
+    })).join('');
+  }
+  else if (context instanceof Item) {
+    const violations = context.parts.flatMap((part) => validatePartConstraints(part.template, part.material).violations);
+    validation = { valid: !violations.length, violations };
+  } else return typeRows;
+  const messages = validation.violations.map((violation) => `<li>${escapeHtml(violation.message)}</li>`).join('');
+  return `<div class="constraint-status ${validation.valid ? 'constraint-valid' : 'constraint-invalid'}">${typeRows}${coverageRows}<strong>${validation.valid ? 'Type constraints satisfied' : 'Type constraint violation'}</strong>${messages ? `<ul>${messages}</ul>` : ''}</div>`;
 }
 
 function renderAllTabs() {
@@ -598,6 +660,7 @@ function renderMaterialsList() {
               <div>Total Volume: <strong>${totalVolume.toFixed(1)} cm\u00b3</strong></div>
               <div>Total Mass: <strong>${totalMass.toFixed(0)}g</strong></div>
             </div>
+            ${constraintStatusHtml(material)}
             <div class="material-editor" style="margin-top: 12px;">
               <div class="material-volume-row">
                 <span>Total Batch Volume</span>
@@ -637,14 +700,23 @@ function renderMaterialsList() {
     button.addEventListener('click', () => {
       const material = state.materials[button.dataset.materialId];
       if (!material) return;
+      const candidate = material.clone();
       document.querySelectorAll(`.material-substance-volume[data-material-id="${material.id}"]`).forEach((input) => {
         const substanceId = input.dataset.substanceId;
         const isJunk = input.dataset.isJunk === 'true';
         const value = parseFloat(input.value);
         if (Number.isFinite(value)) {
-          material.setSubstanceVolume(substanceId, value, isJunk);
+          const target = isJunk ? candidate.junk : candidate.substances;
+          const other = isJunk ? candidate.substances : candidate.junk;
+          if (value > 0) target[substanceId] = value; else delete target[substanceId];
+          if (value > 0) delete other[substanceId];
         }
       });
+      const validation = validateMaterialConstraints(candidate);
+      if (!validation.valid) return alert(validation.violations[0].message);
+      material.substances = candidate.substances;
+      material.junk = candidate.junk;
+      persistState();
       renderAllTabs();
     });
   });
@@ -671,7 +743,11 @@ function renderMaterialsList() {
       if (!Number.isFinite(volume) || volume <= 0) return alert('Volume must be greater than zero.');
       const isJunk = confirm('Mark this constituent as junk?');
       if (isJunk) material.addJunk(substance, volume);
-      else material.addSubstance(substance, volume);
+      else {
+        const validation = canAddSubstanceToMaterial(material, substance, volume);
+        if (!validation.valid) return alert(validation.violations[0].message);
+        material.addSubstance(substance, volume);
+      }
       renderAllTabs();
     });
   });
@@ -824,7 +900,11 @@ document.addEventListener('DOMContentLoaded', () => {
         const substance = state.substances[substanceId];
         const isJunk = document.getElementById('substance-is-junk').checked;
         if (isJunk) newMaterialBuffer.addJunk(substance, volume);
-        else newMaterialBuffer.addSubstance(substance, volume);
+        else {
+          const validation = canAddSubstanceToMaterial(newMaterialBuffer, substance, volume);
+          if (!validation.valid) return alert(validation.violations[0].message);
+          newMaterialBuffer.addSubstance(substance, volume);
+        }
 
         document.getElementById('substance-volume').value = '';
         document.getElementById('substance-is-junk').checked = false;
@@ -856,6 +936,7 @@ function updateNewMaterialPreview() {
       ${compositionHtml}
       <div style="margin-top: 8px; font-weight: bold;">Total Volume: ${totalVolume.toFixed(1)} cm\u00b3</div>
       <div style="font-weight: bold;">Total Mass: ${totalMass.toFixed(0)}g</div>
+      ${constraintStatusHtml(newMaterialBuffer)}
     </div>
   `;
 }
@@ -872,6 +953,8 @@ document.addEventListener('DOMContentLoaded', () => {
 
         const name = document.getElementById('new-material-name').value || 'Unnamed Material';
         newMaterialBuffer.name = name;
+        const validation = validateMaterialConstraints(newMaterialBuffer);
+        if (!validation.valid) return alert(validation.violations[0].message);
 
         const existingMatch = findMatchingMaterialBatch(newMaterialBuffer);
         if (existingMatch) {
@@ -901,6 +984,10 @@ document.addEventListener('DOMContentLoaded', () => {
         const second = state.materials[secondId];
         if (!first || !second) return;
 
+        const candidate = first.clone();
+        Object.entries(second.substances).forEach(([id, volume]) => { candidate.substances[id] = (candidate.substances[id] || 0) + volume; });
+        const validation = validateMaterialConstraints(candidate);
+        if (!validation.valid) return alert(validation.violations[0]?.message || 'Those material batches cannot be merged.');
         const merged = new Material(`${first.name} + ${second.name}`);
         merged.merge(first);
         merged.merge(second);
@@ -984,6 +1071,7 @@ function updateCraftMaterialSelect() {
           <span>Mass: <strong>${material.getTotalMassGrams(state.substances).toFixed(1)}g</strong></span>
         </div>
         <div class="source-composition"><strong>Composition</strong>${compositionHtml || '<p class="empty">No constituents</p>'}</div>
+        ${constraintStatusHtml(material)}
         <div class="calculation-display">
           <h4>Calculated Systems</h4>
           ${systemsHtml}
@@ -1004,6 +1092,7 @@ function updateCraftMaterialSelect() {
           <div>Material consumed: ${preview.consumed.toFixed(1)} cm³</div>
           <div>Volume required: ${state.partTemplates[templateId].volumeCm3} cm³</div>
           <div style="font-size: 0.9em; color: #666; margin-top: 4px;">${escapeHtml(state.partTemplates[templateId].description)}</div>
+          ${preview.part ? constraintStatusHtml(preview.part) : ''}
           <div class="calculation-display" style="margin-top: 8px;">${previewSystems}</div>
         </div>
       `;
@@ -1044,6 +1133,7 @@ function updateCraftTemplateSelect() {
           <div>Material consumed: ${preview.consumed.toFixed(1)} cm³</div>
           <div>Volume required: ${template.volumeCm3} cm\u00b3</div>
           <div style="font-size: 0.9em; color: #666; margin-top: 4px;">${escapeHtml(template.description)}</div>
+          ${preview.part ? constraintStatusHtml(preview.part) : ''}
           <div class="calculation-display" style="margin-top: 8px;">${previewSystems}</div>
         </div>
       `;
@@ -1105,6 +1195,8 @@ document.addEventListener('DOMContentLoaded', () => {
         }
 
         const resolvedPartName = (partName || '').trim() || `${material.name} ${template.name}`;
+        const constraintValidation = validatePartConstraints(template, preview.part.material);
+        if (!constraintValidation.valid) return alert(constraintValidation.violations[0].message);
         const part = createPart(resolvedPartName, template, material);
         if (!part) {
           alert('Not enough material for this template.');
@@ -1120,6 +1212,7 @@ document.addEventListener('DOMContentLoaded', () => {
             Template: ${escapeHtml(template.name)}<br>
             Material consumed: ${preview.consumed.toFixed(1)} cm³<br>
             Type: ${escapeHtml(template.partType.name)}<br>
+            ${constraintStatusHtml(part)}
             <div class="calculation-display">${partSystems}</div>
           </div>
         `;
@@ -1286,6 +1379,7 @@ function renderPartsList() {
             <div>Template: ${escapeHtml(part.template.name)}</div>
             <div>Mass: ${totalMass.toFixed(0)}g</div>
             <div>Status: ${part.usedInItemId ? `Assembled into ${escapeHtml(state.items[part.usedInItemId]?.name || 'an item')}` : 'Available'}</div>
+            ${constraintStatusHtml(part)}
             <div class="calculation-display">${systemsHtml}</div>
             <button class="btn btn-secondary edit-part-button" data-part-id="${part.id}">Edit</button>
             <button class="btn btn-danger delete-part-button" data-part-id="${part.id}">Delete</button>
@@ -1304,24 +1398,26 @@ function renderPartsList() {
       if (templateName === null) return;
       const template = Object.values(state.partTemplates).find((entry) => entry.name.toLowerCase() === templateName.toLowerCase());
       if (!template) return alert('No part template has that name.');
-      const previousTemplate = part.template;
-      part.name = name;
-      part.template = template;
+      const candidateMaterial = part.material.clone();
+      for (const substance of Object.values(state.substances)) {
+        const current = part.material.substances[substance.id] ?? '';
+        const volumeText = promptText(`${substance.name} usable volume in this part (cm³; blank removes)`, current);
+        if (volumeText === null) return;
+        if (volumeText === '') delete candidateMaterial.substances[substance.id];
+        else if (Number.isFinite(Number(volumeText)) && Number(volumeText) >= 0) candidateMaterial.substances[substance.id] = Number(volumeText);
+      }
+      const constraintValidation = validatePartConstraints(template, candidateMaterial);
+      if (!constraintValidation.valid) return alert(constraintValidation.violations[0].message);
+      const previous = { name: part.name, template: part.template, material: part.material };
+      part.name = name; part.template = template; part.material = candidateMaterial;
       if (part.usedInItemId) {
         const owner = state.items[part.usedInItemId];
         const validation = validateItemParts(owner.template, owner.parts, owner.id);
         if (!validation.valid) {
-          part.template = previousTemplate;
-          return alert(`That template would invalidate ${owner.name}: ${validation.message}`);
+          part.name = previous.name; part.template = previous.template; part.material = previous.material;
+          return alert(`That edit would invalidate ${owner.name}: ${validation.message}`);
         }
       }
-      Object.values(state.substances).forEach((substance) => {
-        const current = part.material.substances[substance.id] ?? '';
-        const volumeText = promptText(`${substance.name} usable volume in this part (cm³; blank removes)`, current);
-        if (volumeText === null) return;
-        if (volumeText === '') delete part.material.substances[substance.id];
-        else if (Number.isFinite(Number(volumeText)) && Number(volumeText) >= 0) part.material.substances[substance.id] = Number(volumeText);
-      });
       persistState();
       renderAllTabs();
     });
@@ -1367,6 +1463,7 @@ function renderItemsList() {
             <div>Total Mass: ${totalMass.toFixed(0)}g</div>
             <strong>Components:</strong>
             <ul style="margin: 4px 0 0 20px;">${partsList}</ul>
+            ${constraintStatusHtml(item)}
             <div class="calculation-display" style="margin-top: 12px;">${systemsHtml}</div>
             <button class="btn btn-secondary edit-item-button" data-item-id="${item.id}">Edit</button>
             <button class="btn btn-danger delete-item-button" data-item-id="${item.id}">Disassemble &amp; Delete</button>
@@ -1414,6 +1511,20 @@ function renderSystemsTab() {
 
 const TARGET_LABELS = { substance: 'Substances', partType: 'Part Types', partTemplate: 'Part Templates', itemTemplate: 'Item Templates' };
 
+function constraintSystemEditorHtml(system) {
+  if (!system.capabilities.typeConstraints) return '';
+  const types = Object.values(system.types);
+  return `<div class="constraint-system-panel">
+    <div class="system-subheading"><div><h4>Type Constraints</h4><p class="field-help">Companion permissions are symmetric. Identical types are always compatible.</p></div><button class="btn btn-secondary add-constraint-type">Add Type</button></div>
+    <label>Default required coverage % <input class="constraint-default-threshold" type="number" min="0" max="100" step="0.1" value="${system.defaultCoveragePercent}"></label>
+    <div class="constraint-type-list">${types.map((type) => `
+      <div class="constraint-type-row" data-type-id="${type.id}">
+        <div class="system-subheading"><div><strong>${escapeHtml(type.name)}</strong><small>${escapeHtml(type.description || '')}</small></div><div><button class="edit-constraint-type">Edit</button><button class="delete-constraint-type">Delete</button></div></div>
+        <div class="constraint-companions"><span>Allowed companions:</span>${types.filter((candidate) => candidate.id !== type.id).map((candidate) => `<label><input class="constraint-companion-toggle" type="checkbox" data-companion-id="${candidate.id}" ${type.allowedCompanionIds.includes(candidate.id) ? 'checked' : ''}> ${escapeHtml(candidate.name)}</label>`).join('') || '<em>Add another type to define companions.</em>'}</div>
+      </div>`).join('') || '<p class="empty">No types defined.</p>'}</div>
+  </div>`;
+}
+
 function renderCentralSystemData(system) {
   const sections = SYSTEM_TARGETS.filter((target) => system.targets[target]).map((target) => {
     const entities = Object.values(getTargetCollection(target));
@@ -1439,7 +1550,7 @@ function renderSystemsList() {
     <div class="system-editor" data-system-id="${system.id}">
       <div class="system-editor-header">
         <div><h3>${escapeHtml(system.name)}</h3><p>${escapeHtml(system.description || 'No description')}</p></div>
-        <span class="type-badge">${system.processorId === 'volume' ? 'Volume-scaled' : 'Flat'}</span>
+        <div class="system-badges"><span class="type-badge">${system.processorId === 'volume' ? 'Volume-scaled' : 'Flat'}</span>${system.capabilities.typeConstraints ? '<span class="type-badge">Type constraints</span>' : ''}</div>
       </div>
       <div class="system-actions">
         <button class="btn btn-secondary edit-system-button">Edit System</button>
@@ -1463,8 +1574,11 @@ function renderSystemsList() {
           <label class="system-toggle"><input class="system-behavior-toggle" type="checkbox" data-behavior="inherit" ${system.behaviors.inherit ? 'checked' : ''}> Live inheritance</label>
           <label class="system-toggle"><input class="system-behavior-toggle" type="checkbox" data-behavior="addNumeric" ${system.behaviors.addNumeric ? 'checked' : ''}> Add numeric fields</label>
           <label class="system-toggle"><input class="system-calculation-toggle" type="checkbox" ${system.showInCalculations ? 'checked' : ''}> Show in crafting calculations</label>
+          <label class="system-toggle"><input class="system-type-constraint-toggle" type="checkbox" ${system.capabilities.typeConstraints ? 'checked' : ''}> Enable Type Constraints</label>
         </div>
       </div>
+
+      ${constraintSystemEditorHtml(system)}
 
       <div class="system-schema-grid">
         <div>
@@ -1504,6 +1618,16 @@ function renderSystemsList() {
     editor.querySelector('.system-processor-select').addEventListener('change', (event) => { system.processorId = event.target.value === 'volume' ? 'volume' : 'flat'; persistState(); renderAllTabs(); });
     editor.querySelectorAll('.system-behavior-toggle').forEach((input) => input.addEventListener('change', () => { system.behaviors[input.dataset.behavior] = input.checked; persistState(); renderAllTabs(); }));
     editor.querySelector('.system-calculation-toggle').addEventListener('change', (event) => { system.showInCalculations = event.target.checked; persistState(); renderAllTabs(); });
+    editor.querySelector('.system-type-constraint-toggle').addEventListener('change', (event) => { system.capabilities.typeConstraints = event.target.checked; persistState(); renderAllTabs(); });
+
+    editor.querySelector('.constraint-default-threshold')?.addEventListener('change', (event) => { system.defaultCoveragePercent = clampCoveragePercent(event.target.value, 100); persistState(); renderAllTabs(); });
+    editor.querySelector('.add-constraint-type')?.addEventListener('click', () => { const name = promptText('Type name', ''); if (!name) return; const description = promptText('Type description', '') ?? ''; system.addType(name, description); renderAllTabs(); });
+    editor.querySelectorAll('.constraint-type-row').forEach((row) => {
+      const type = system.types[row.dataset.typeId];
+      row.querySelector('.edit-constraint-type').addEventListener('click', () => { const name = promptText('Type name', type.name); if (!name) return; const description = promptText('Type description', type.description); if (description === null) return; type.name = name; type.description = description; persistState(); renderAllTabs(); });
+      row.querySelector('.delete-constraint-type').addEventListener('click', () => { if (confirm(`Delete type “${type.name}” and remove it from all memberships and rules?`)) { deleteConstraintType(system.id, type.id); renderAllTabs(); } });
+      row.querySelectorAll('.constraint-companion-toggle').forEach((input) => input.addEventListener('change', () => { setTypeCompanion(system.id, type.id, input.dataset.companionId, input.checked); renderAllTabs(); }));
+    });
 
     editor.querySelector('.add-system-field').addEventListener('click', () => {
       const name = promptText('Field name', 'Value'); if (!name) return;
@@ -1552,9 +1676,11 @@ document.addEventListener('DOMContentLoaded', () => {
 
         const processor = document.getElementById('system-processor').value;
         const system = createSystemDefinition(name, description, processor);
+        system.capabilities.typeConstraints = document.getElementById('system-type-constraints').checked;
         document.getElementById('system-name').value = '';
         document.getElementById('system-description').value = '';
         document.getElementById('system-processor').value = 'flat';
+        document.getElementById('system-type-constraints').checked = false;
 
         renderAllTabs();
       });

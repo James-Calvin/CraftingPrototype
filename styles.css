@@ -752,6 +752,27 @@ header p {
 .system-toggle { display: block; color: #c0c0c0; margin: 8px 0; }
 .system-toggle input { margin-right: 7px; }
 .system-processor-select { display: block; width: 100%; margin-top: 6px; }
+.system-badges { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 6px; }
+.constraint-system-panel { margin-top: 18px; padding: 14px; background: #222237; border: 1px solid #56566c; border-radius: 6px; }
+.constraint-system-panel > label { display: block; margin: 10px 0; }
+.constraint-system-panel input[type="number"] { width: 150px; margin-left: 8px; }
+.constraint-type-list { display: grid; gap: 10px; margin-top: 12px; }
+.constraint-type-row { padding: 10px; background: #181829; border: 1px solid #444; border-radius: 5px; }
+.constraint-type-row small { display: block; color: #9f9faf; }
+.constraint-companions, .constraint-type-options { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 14px; margin-top: 8px; }
+.constraint-companions label, .constraint-type-options label { color: #c8c8d0; }
+.constraint-editor { margin: 10px 0; padding: 10px; background: #181829; border: 1px solid #444; border-radius: 5px; }
+.constraint-editor > label { display: block; margin-top: 8px; }
+.constraint-editor .constraint-threshold { width: 130px; margin-left: 8px; }
+.constraint-status { margin: 10px 0; padding: 10px; border-radius: 5px; border: 1px solid; }
+.constraint-valid { background: rgba(44, 120, 75, 0.16); border-color: #3d8b5c; }
+.constraint-invalid { background: rgba(150, 48, 48, 0.16); border-color: #b94b4b; }
+.constraint-invalid > strong { color: #ff8a8a; }
+.constraint-valid > strong { color: #79d49c; }
+.constraint-status ul { margin: 6px 0 0 20px; }
+.constraint-type-summary { margin-bottom: 7px; }
+.constraint-type-summary .type-badge { display: inline-block; margin: 2px; }
+.constraint-coverage-row { display: flex; justify-content: space-between; gap: 12px; color: #c8c8d0; padding: 3px 0; }
 .field-help, .schema-row small { display: block; color: #888; font-size: 0.82em; }
 .schema-row { border-bottom: 1px solid #3b3b4c; padding: 9px 0; }
 .schema-row button, .choice-options button { background: #36364a; border: 1px solid #555; border-radius: 3px; color: #ddd; cursor: pointer; margin-left: 5px; padding: 3px 6px; }

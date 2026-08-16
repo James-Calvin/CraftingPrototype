@@ -1,8 +1,8 @@
 // Runtime-defined crafting model. Systems own schemas and labels; definitions own values.
 
-const STORAGE_KEY = 'text-based-mmo-crafting-system-v4';
-const LEGACY_STORAGE_KEYS = ['text-based-mmo-crafting-system-v1', 'text-based-mmo-crafting-system-v2', 'text-based-mmo-crafting-system-v3'];
-const SNAPSHOT_VERSION = 4;
+const STORAGE_KEY = 'text-based-mmo-crafting-system-v5';
+const LEGACY_STORAGE_KEYS = ['text-based-mmo-crafting-system-v1', 'text-based-mmo-crafting-system-v2', 'text-based-mmo-crafting-system-v3', 'text-based-mmo-crafting-system-v4'];
+const SNAPSHOT_VERSION = 5;
 const SYSTEM_TARGETS = ['substance', 'partType', 'partTemplate', 'itemTemplate'];
 const FIELD_TYPES = ['number', 'text', 'boolean', 'choice'];
 
@@ -28,6 +28,9 @@ class SystemDefinition {
     this.showInCalculations = false;
     this.targets = { substance: false, partType: false, partTemplate: false, itemTemplate: false };
     this.behaviors = { inherit: true, addNumeric: false };
+    this.capabilities = { typeConstraints: false };
+    this.defaultCoveragePercent = 100;
+    this.types = {};
     this.fields = {};
     this.labels = {};
   }
@@ -50,6 +53,13 @@ class SystemDefinition {
     this.labels[label.id] = label;
     persistState();
     return label;
+  }
+
+  addType(name, description = '') {
+    const type = { id: generateId('type'), name, description, allowedCompanionIds: [] };
+    this.types[type.id] = type;
+    persistState();
+    return type;
   }
 }
 
@@ -76,14 +86,19 @@ class Material {
   }
 
   addSubstance(substance, volumeCm3) {
-    this.substances[substance.id] = (this.substances[substance.id] || 0) + volumeCm3;
+    const amount = Number(volumeCm3);
+    if (!substance || !Number.isFinite(amount) || amount <= 0) return null;
+    if (!canAddSubstanceToMaterial(this, substance, amount).valid) return null;
+    this.substances[substance.id] = (this.substances[substance.id] || 0) + amount;
     delete this.junk[substance.id];
     persistState();
     return this;
   }
 
   addJunk(substance, volumeCm3) {
-    this.junk[substance.id] = (this.junk[substance.id] || 0) + volumeCm3;
+    const amount = Number(volumeCm3);
+    if (!substance || !Number.isFinite(amount) || amount <= 0) return null;
+    this.junk[substance.id] = (this.junk[substance.id] || 0) + amount;
     delete this.substances[substance.id];
     persistState();
     return this;
@@ -137,6 +152,13 @@ class Material {
     const target = isJunk ? this.junk : this.substances;
     const other = isJunk ? this.substances : this.junk;
     const value = Math.max(0, Number(volumeCm3) || 0);
+    const previousUsable = Number(this.substances[substanceId] || 0);
+    if (!isJunk && value > previousUsable) {
+      const candidate = this.clone();
+      if (value) candidate.substances[substanceId] = value; else delete candidate.substances[substanceId];
+      if (value) delete candidate.junk[substanceId];
+      if (!validateMaterialConstraints(candidate).valid) return null;
+    }
     if (value) target[substanceId] = value;
     else delete target[substanceId];
     if (value) delete other[substanceId];
@@ -145,9 +167,10 @@ class Material {
   }
 
   merge(other) {
-    Object.entries(other?.substances || {}).forEach(([id, volume]) => {
-      if (state.substances[id]) this.addSubstance(state.substances[id], volume);
-    });
+    const candidate = this.clone();
+    Object.entries(other?.substances || {}).forEach(([id, volume]) => { if (state.substances[id]) candidate.substances[id] = (candidate.substances[id] || 0) + volume; });
+    if (!validateMaterialConstraints(candidate).valid) return null;
+    Object.entries(other?.substances || {}).forEach(([id, volume]) => { if (state.substances[id]) this.substances[id] = (this.substances[id] || 0) + volume; });
     Object.entries(other?.junk || {}).forEach(([id, volume]) => {
       if (state.substances[id]) this.addJunk(state.substances[id], volume);
     });
@@ -159,6 +182,9 @@ class Material {
     const available = this.getUsableVolumeCm3();
     if (!template || template.volumeCm3 <= 0 || template.volumeCm3 > available) return null;
     const ratio = template.volumeCm3 / available;
+    const preview = new Material(`${this.name} preview`);
+    preview.substances = Object.fromEntries(Object.entries(this.substances).map(([id, volume]) => [id, volume * ratio]));
+    if (!validatePartConstraints(template, preview).valid) return null;
     const consumed = new Material(`${this.name} → ${template.name}`);
     Object.entries({ ...this.substances }).forEach(([id, volume]) => {
       const taken = volume * ratio;
@@ -308,17 +334,86 @@ function normalizeFieldValue(field, value) {
   return String(value);
 }
 
+function createSystemDataEnvelope() {
+  return { values: {}, typeMembership: { typeIds: [] }, allowRule: { enabled: false, allowedTypeIds: [], minimumCoveragePercent: null } };
+}
+
+function getSystemDataEnvelope(entity, systemId, create = false) {
+  if (!entity?.systemData) return null;
+  if (!entity.systemData[systemId] && create) entity.systemData[systemId] = createSystemDataEnvelope();
+  return entity.systemData[systemId] || null;
+}
+
+function clampCoveragePercent(value, fallback = null) {
+  if (value === '' || value == null) return fallback;
+  const numeric = Number(value);
+  return Number.isFinite(numeric) ? Math.min(100, Math.max(0, numeric)) : fallback;
+}
+
 function setSystemValue(entity, systemId, labelId, fieldId, value) {
   const system = state.systems[systemId];
   const field = system?.fields[fieldId];
   if (!entity?.systemData || !system || !system.labels[labelId] || !field) return false;
   const normalized = normalizeFieldValue(field, value);
-  entity.systemData[systemId] ||= {};
-  entity.systemData[systemId][labelId] ||= {};
-  if (normalized === undefined) delete entity.systemData[systemId][labelId][fieldId];
-  else entity.systemData[systemId][labelId][fieldId] = normalized;
-  if (!Object.keys(entity.systemData[systemId][labelId]).length) delete entity.systemData[systemId][labelId];
-  if (!Object.keys(entity.systemData[systemId]).length) delete entity.systemData[systemId];
+  const envelope = getSystemDataEnvelope(entity, systemId, true);
+  envelope.values[labelId] ||= {};
+  if (normalized === undefined) delete envelope.values[labelId][fieldId];
+  else envelope.values[labelId][fieldId] = normalized;
+  if (!Object.keys(envelope.values[labelId]).length) delete envelope.values[labelId];
+  persistState();
+  return true;
+}
+
+function setTypeMembership(entity, systemId, typeIds) {
+  const system = state.systems[systemId];
+  if (!(entity instanceof Substance) || !system?.capabilities.typeConstraints) return false;
+  const envelope = getSystemDataEnvelope(entity, systemId, true);
+  envelope.typeMembership.typeIds = [...new Set(typeIds || [])].filter((id) => system.types[id]);
+  persistState();
+  return true;
+}
+
+function setAllowRule(entity, systemId, { enabled, allowedTypeIds, minimumCoveragePercent }) {
+  const system = state.systems[systemId];
+  if (!(entity instanceof PartType) && !(entity instanceof PartTemplate)) return false;
+  if (!system?.capabilities.typeConstraints) return false;
+  const envelope = getSystemDataEnvelope(entity, systemId, true);
+  envelope.allowRule = {
+    enabled: enabled === true,
+    allowedTypeIds: [...new Set(allowedTypeIds || [])].filter((id) => system.types[id]),
+    minimumCoveragePercent: clampCoveragePercent(minimumCoveragePercent, null),
+  };
+  persistState();
+  return true;
+}
+
+function setTypeCompanion(systemId, typeId, companionId, allowed) {
+  const system = state.systems[systemId];
+  const type = system?.types[typeId];
+  const companion = system?.types[companionId];
+  if (!type || !companion || typeId === companionId) return false;
+  const update = (entry, otherId) => {
+    const values = new Set(entry.allowedCompanionIds || []);
+    if (allowed) values.add(otherId); else values.delete(otherId);
+    entry.allowedCompanionIds = [...values];
+  };
+  update(type, companionId);
+  update(companion, typeId);
+  persistState();
+  return true;
+}
+
+function deleteConstraintType(systemId, typeId) {
+  const system = state.systems[systemId];
+  if (!system?.types[typeId]) return false;
+  delete system.types[typeId];
+  Object.values(system.types).forEach((type) => { type.allowedCompanionIds = (type.allowedCompanionIds || []).filter((id) => id !== typeId); });
+  SYSTEM_TARGETS.forEach((target) => Object.values(getTargetCollection(target)).forEach((entity) => {
+    const envelope = getSystemDataEnvelope(entity, systemId);
+    if (!envelope) return;
+    envelope.typeMembership.typeIds = envelope.typeMembership.typeIds.filter((id) => id !== typeId);
+    envelope.allowRule.allowedTypeIds = envelope.allowRule.allowedTypeIds.filter((id) => id !== typeId);
+  }));
   persistState();
   return true;
 }
@@ -328,14 +423,14 @@ function clearSystemDataReference(systemId, labelId = null, fieldId = null) {
     const systemData = entity.systemData?.[systemId];
     if (!systemData) return;
     if (!labelId) delete entity.systemData[systemId];
-    else if (!fieldId) delete systemData[labelId];
-    else Object.values(systemData).forEach((fields) => { delete fields[fieldId]; });
+    else if (!fieldId) delete systemData.values[labelId];
+    else Object.values(systemData.values).forEach((fields) => { delete fields[fieldId]; });
   }));
 }
 
 function directRecords(entity, target, system, multiplier = 1) {
   if (!entity || !system.targets[target]) return [];
-  const data = entity.systemData?.[system.id] || {};
+  const data = entity.systemData?.[system.id]?.values || {};
   return Object.entries(data).filter(([labelId]) => system.labels[labelId]).map(([labelId, rawFields]) => {
     const fields = {};
     Object.entries(rawFields).forEach(([fieldId, value]) => {
@@ -418,6 +513,112 @@ function evaluateVisibleSystems(context) {
   return Object.values(state.systems).filter((system) => system.showInCalculations).map((system) => evaluateSystem(system.id, context));
 }
 
+function getConstraintSystems() {
+  return Object.values(state.systems).filter((system) => system.capabilities.typeConstraints);
+}
+
+function getSubstanceTypeIds(system, substance) {
+  if (!system?.targets.substance || !substance) return [];
+  return (getSystemDataEnvelope(substance, system.id)?.typeMembership.typeIds || []).filter((id) => system.types[id]);
+}
+
+function getDerivedTypeSummary(context) {
+  const materials = context instanceof Material ? [context]
+    : context instanceof Part ? [context.material]
+      : context instanceof Item ? context.parts.map((part) => part.material) : [];
+  return getConstraintSystems().map((system) => {
+    const typeIds = new Set();
+    materials.forEach((material) => Object.keys(material?.substances || {}).forEach((substanceId) => {
+      getSubstanceTypeIds(system, state.substances[substanceId]).forEach((id) => typeIds.add(id));
+    }));
+    return { system, typeIds: [...typeIds], types: [...typeIds].map((id) => system.types[id]).filter(Boolean) };
+  });
+}
+
+function typePairIsCompatible(system, leftTypeIds, rightTypeIds) {
+  return leftTypeIds.some((leftId) => rightTypeIds.some((rightId) => {
+    return leftId === rightId || system.types[leftId]?.allowedCompanionIds?.includes(rightId);
+  }));
+}
+
+function validateMaterialConstraints(material) {
+  const violations = [];
+  const results = [];
+  getConstraintSystems().forEach((system) => {
+    if (!system.targets.substance) return;
+    const constituents = Object.entries(material?.substances || {}).filter(([, volume]) => Number(volume) > 0).map(([substanceId, volumeCm3]) => ({
+      substance: state.substances[substanceId], volumeCm3: Number(volumeCm3),
+    })).filter((entry) => entry.substance);
+    const systemViolations = [];
+    for (let leftIndex = 0; leftIndex < constituents.length; leftIndex += 1) {
+      for (let rightIndex = leftIndex + 1; rightIndex < constituents.length; rightIndex += 1) {
+        const left = constituents[leftIndex];
+        const right = constituents[rightIndex];
+        const leftTypes = getSubstanceTypeIds(system, left.substance);
+        const rightTypes = getSubstanceTypeIds(system, right.substance);
+        if (!leftTypes.length || !rightTypes.length || typePairIsCompatible(system, leftTypes, rightTypes)) continue;
+        systemViolations.push({
+          kind: 'incompatible-substances', systemId: system.id, substanceIds: [left.substance.id, right.substance.id],
+          message: `${left.substance.name} and ${right.substance.name} have no allowed companion types in ${system.name}.`,
+        });
+      }
+    }
+    violations.push(...systemViolations);
+    results.push({ systemId: system.id, valid: !systemViolations.length, violations: systemViolations });
+  });
+  return { valid: !violations.length, violations, results };
+}
+
+function getAllowRule(system, entity, target) {
+  if (!system.targets[target]) return null;
+  const rule = getSystemDataEnvelope(entity, system.id)?.allowRule;
+  return rule?.enabled ? rule : null;
+}
+
+function evaluateAllowRule(system, entity, target, material) {
+  const rule = getAllowRule(system, entity, target);
+  if (!rule) return null;
+  const totalVolumeCm3 = material?.getUsableVolumeCm3() || 0;
+  const allowed = new Set(rule.allowedTypeIds.filter((id) => system.types[id]));
+  const allowedVolumeCm3 = Object.entries(material?.substances || {}).reduce((sum, [substanceId, volume]) => {
+    const typeIds = getSubstanceTypeIds(system, state.substances[substanceId]);
+    return sum + (typeIds.some((id) => allowed.has(id)) ? Number(volume) : 0);
+  }, 0);
+  const coveragePercent = totalVolumeCm3 > 0 ? (allowedVolumeCm3 / totalVolumeCm3) * 100 : 0;
+  const requiredPercent = clampCoveragePercent(rule.minimumCoveragePercent, clampCoveragePercent(system.defaultCoveragePercent, 100));
+  return { systemId: system.id, target, entityId: entity.id, allowedTypeIds: [...allowed], totalVolumeCm3, allowedVolumeCm3, coveragePercent, requiredPercent, passed: coveragePercent + 1e-9 >= requiredPercent };
+}
+
+function validatePartConstraints(template, material) {
+  const materialValidation = validateMaterialConstraints(material);
+  const violations = [...materialValidation.violations];
+  const results = [];
+  getConstraintSystems().forEach((system) => {
+    const rules = [
+      evaluateAllowRule(system, template?.partType, 'partType', material),
+      evaluateAllowRule(system, template, 'partTemplate', material),
+    ].filter(Boolean);
+    if (!rules.length) return;
+    const passed = rules.some((rule) => rule.passed);
+    results.push({ systemId: system.id, passed, rules });
+    if (!passed) {
+      const best = [...rules].sort((left, right) => right.coveragePercent - left.coveragePercent)[0];
+      violations.push({
+        kind: 'insufficient-type-coverage', systemId: system.id, templateId: template.id, rules,
+        message: `${template.name} needs ${best.requiredPercent.toFixed(1)}% allowed ${system.name} volume; this material provides ${best.coveragePercent.toFixed(1)}%.`,
+      });
+    }
+  });
+  return { valid: !violations.length, violations, materialValidation, results };
+}
+
+function canAddSubstanceToMaterial(material, substance, volumeCm3) {
+  const candidate = material.clone();
+  candidate.substances[substance.id] = (candidate.substances[substance.id] || 0) + Number(volumeCm3 || 0);
+  delete candidate.junk[substance.id];
+  return validateMaterialConstraints(candidate);
+}
+
 function createSystemDefinition(name, description, processorId = 'flat') {
   const system = new SystemDefinition(name, description, processorId);
   state.systems[system.id] = system;
@@ -466,7 +667,7 @@ function deleteChoiceOption(systemId, fieldId, optionId) {
   const field = state.systems[systemId]?.fields[fieldId];
   if (!field) return false;
   SYSTEM_TARGETS.forEach((target) => Object.values(getTargetCollection(target)).forEach((entity) => {
-    Object.values(entity.systemData?.[systemId] || {}).forEach((values) => {
+    Object.values(entity.systemData?.[systemId]?.values || {}).forEach((values) => {
       if (values[fieldId] === optionId) delete values[fieldId];
     });
   }));
@@ -487,10 +688,12 @@ function createRandomMaterialBatch(name, totalVolumeCm3 = 100) {
   let remaining = Math.max(0, totalVolumeCm3);
   while (remaining > 0 && candidates.length) {
     const amount = Math.min(10, remaining);
-    const weight = candidates.reduce((sum, substance) => sum + 1 / Math.max(substance.densityGramsPerCm3, 0.1), 0);
+    const eligible = candidates.filter((substance) => canAddSubstanceToMaterial(batch, substance, amount).valid);
+    if (!eligible.length) break;
+    const weight = eligible.reduce((sum, substance) => sum + 1 / Math.max(substance.densityGramsPerCm3, 0.1), 0);
     let threshold = Math.random() * weight;
-    let selected = candidates[0];
-    for (const candidate of candidates) {
+    let selected = eligible[0];
+    for (const candidate of eligible) {
       threshold -= 1 / Math.max(candidate.densityGramsPerCm3, 0.1);
       if (threshold <= 0) { selected = candidate; break; }
     }
@@ -501,6 +704,12 @@ function createRandomMaterialBatch(name, totalVolumeCm3 = 100) {
 }
 
 function createPart(name, template, material) {
+  const available = material?.getUsableVolumeCm3() || 0;
+  if (!template || template.volumeCm3 <= 0 || template.volumeCm3 > available) return null;
+  const ratio = template.volumeCm3 / available;
+  const previewMaterial = new Material(`${material.name} preview`);
+  previewMaterial.substances = Object.fromEntries(Object.entries(material.substances).map(([id, volume]) => [id, volume * ratio]));
+  if (!validatePartConstraints(template, previewMaterial).valid) return null;
   const consumed = material?.consumeTemplate(template);
   if (!consumed) return null;
   const part = new Part(name, template, consumed);
@@ -513,6 +722,11 @@ function validateItemParts(template, parts, currentItemId = null) {
   if (!template) return { valid: false, message: 'Select an item template.' };
   if (new Set(parts.map((part) => part.id)).size !== parts.length) return { valid: false, message: 'Each part can only fill one slot.' };
   if (parts.some((part) => part.usedInItemId && part.usedInItemId !== currentItemId)) return { valid: false, message: 'A selected part is already assembled.' };
+  const invalidPart = parts.find((part) => !validatePartConstraints(part.template, part.material).valid);
+  if (invalidPart) {
+    const violation = validatePartConstraints(invalidPart.template, invalidPart.material).violations[0];
+    return { valid: false, message: `${invalidPart.name} is no longer valid: ${violation?.message || 'its material violates a type constraint.'}` };
+  }
   for (const required of template.requiredParts) {
     const count = parts.filter((part) => part.template.partType.id === required.partType.id).length;
     if (count < required.count) return { valid: false, message: `Missing required ${required.partType.name} part.` };
@@ -574,8 +788,11 @@ function importCraftingData(serializedData) {
   try {
     const importedSnapshot = typeof serializedData === 'string' ? JSON.parse(serializedData) : serializedData;
     if (!importedSnapshot || typeof importedSnapshot !== 'object' || Array.isArray(importedSnapshot)) throw new Error('The imported file must contain a crafting workspace object.');
-    if (importedSnapshot.version !== SNAPSHOT_VERSION) throw new Error(`Only version ${SNAPSHOT_VERSION} crafting exports can be imported.`);
-    hydrateState(importedSnapshot);
+    if (![4, SNAPSHOT_VERSION].includes(importedSnapshot.version)) throw new Error(`Only version 4 or ${SNAPSHOT_VERSION} crafting exports can be imported.`);
+    if (importedSnapshot.version === 4) {
+      hydrateState(migrateV4Snapshot(importedSnapshot));
+      installBaselineTypesSystem();
+    } else hydrateState(importedSnapshot);
     persistState();
     return state;
   } catch (error) {
@@ -586,22 +803,46 @@ function importCraftingData(serializedData) {
 
 function hydrateSystemData(raw) {
   const result = {};
-  Object.entries(raw || {}).forEach(([systemId, labels]) => {
+  Object.entries(raw || {}).forEach(([systemId, rawEnvelope]) => {
     const system = state.systems[systemId];
     if (!system) return;
+    const envelope = createSystemDataEnvelope();
+    const labels = rawEnvelope?.values || {};
     Object.entries(labels || {}).forEach(([labelId, fields]) => {
       if (!system.labels[labelId]) return;
       Object.entries(fields || {}).forEach(([fieldId, value]) => {
         const field = system.fields[fieldId];
         const normalized = field ? normalizeFieldValue(field, value) : undefined;
         if (normalized === undefined) return;
-        result[systemId] ||= {};
-        result[systemId][labelId] ||= {};
-        result[systemId][labelId][fieldId] = normalized;
+        envelope.values[labelId] ||= {};
+        envelope.values[labelId][fieldId] = normalized;
       });
     });
+    envelope.typeMembership.typeIds = [...new Set(rawEnvelope?.typeMembership?.typeIds || [])].filter((id) => system.types[id]);
+    envelope.allowRule = {
+      enabled: rawEnvelope?.allowRule?.enabled === true,
+      allowedTypeIds: [...new Set(rawEnvelope?.allowRule?.allowedTypeIds || [])].filter((id) => system.types[id]),
+      minimumCoveragePercent: clampCoveragePercent(rawEnvelope?.allowRule?.minimumCoveragePercent, null),
+    };
+    if (Object.keys(envelope.values).length || envelope.typeMembership.typeIds.length || envelope.allowRule.enabled || envelope.allowRule.allowedTypeIds.length || envelope.allowRule.minimumCoveragePercent !== null) result[systemId] = envelope;
   });
   return result;
+}
+
+function migrateV4Snapshot(snapshot) {
+  const migrated = copyData(snapshot);
+  migrated.version = SNAPSHOT_VERSION;
+  Object.values(migrated.systems || {}).forEach((system) => {
+    system.capabilities = { typeConstraints: false };
+    system.defaultCoveragePercent = 100;
+    system.types = {};
+  });
+  ['substances', 'partTypes', 'partTemplates', 'itemTemplates'].forEach((collectionName) => {
+    Object.values(migrated[collectionName] || {}).forEach((entity) => {
+      entity.systemData = Object.fromEntries(Object.entries(entity.systemData || {}).map(([systemId, values]) => [systemId, { ...createSystemDataEnvelope(), values }]));
+    });
+  });
+  return migrated;
 }
 
 function hydrateMaterial(raw) { const value = new Material(raw.name); value.id = raw.id; value.substances = { ...(raw.substances || {}) }; value.junk = { ...(raw.junk || {}) }; return value; }
@@ -618,6 +859,21 @@ function hydrateState(snapshot) {
     system.showInCalculations = raw.showInCalculations === true;
     SYSTEM_TARGETS.forEach((target) => { system.targets[target] = raw.targets?.[target] === true; });
     system.behaviors = { inherit: raw.behaviors?.inherit === true, addNumeric: raw.behaviors?.addNumeric === true };
+    system.capabilities = { typeConstraints: raw.capabilities?.typeConstraints === true };
+    system.defaultCoveragePercent = clampCoveragePercent(raw.defaultCoveragePercent, 100);
+    system.types = {};
+    Object.values(raw.types || {}).forEach((entry) => {
+      if (!entry?.id) return;
+      system.types[entry.id] = { id: entry.id, name: String(entry.name || 'Unnamed Type'), description: String(entry.description || ''), allowedCompanionIds: [] };
+    });
+    Object.values(raw.types || {}).forEach((entry) => {
+      if (!system.types[entry?.id]) return;
+      system.types[entry.id].allowedCompanionIds = [...new Set(entry.allowedCompanionIds || [])].filter((id) => id !== entry.id && system.types[id]);
+    });
+    Object.values(system.types).forEach((type) => type.allowedCompanionIds.forEach((companionId) => {
+      const companion = system.types[companionId];
+      if (companion && !companion.allowedCompanionIds.includes(type.id)) companion.allowedCompanionIds.push(type.id);
+    }));
     system.fields = {};
     Object.values(raw.fields || {}).forEach((entry) => {
       if (!entry?.id) return;
@@ -653,6 +909,29 @@ function hydrateState(snapshot) {
   return state;
 }
 
+function installBaselineTypesSystem() {
+  let typesSystem = Object.values(state.systems).find((system) => system.name.trim().toLowerCase() === 'types');
+  if (!typesSystem) typesSystem = createSystemDefinition('Types', 'Classifies usable substances and controls material eligibility.', 'flat');
+  typesSystem.capabilities.typeConstraints = true;
+  typesSystem.showInCalculations = false;
+  typesSystem.defaultCoveragePercent = 100;
+  typesSystem.targets.substance = true;
+  typesSystem.targets.partType = true;
+  typesSystem.targets.partTemplate = true;
+  let metal = Object.values(typesSystem.types).find((type) => type.name.trim().toLowerCase() === 'metal');
+  if (!metal) metal = typesSystem.addType('Metal', 'Material suitable for metalworking.');
+  ['Iron', 'Aluminum', 'Gold'].forEach((name) => {
+    const substance = Object.values(state.substances).find((entry) => entry.name === name);
+    if (substance) setTypeMembership(substance, typesSystem.id, [...(getSystemDataEnvelope(substance, typesSystem.id)?.typeMembership.typeIds || []), metal.id]);
+  });
+  ['Handle', 'Blade', 'Pommel'].forEach((name) => {
+    const partType = Object.values(state.partTypes).find((entry) => entry.name === name);
+    if (partType) setAllowRule(partType, typesSystem.id, { enabled: true, allowedTypeIds: [metal.id], minimumCoveragePercent: null });
+  });
+  persistState();
+  return typesSystem;
+}
+
 function initializeDefaults() {
   const stats = createSystemDefinition('Stats', 'Numeric properties that propagate through crafted objects.', 'volume');
   stats.showInCalculations = true;
@@ -684,6 +963,7 @@ function initializeDefaults() {
   createPartTemplate('Basic Pommel', pommel, 20, 'Simple counterweight');
   const dagger = createItemTemplate('Dagger', 'A short stabbing weapon');
   dagger.requirePart(handle).requirePart(blade).electivePart(pommel);
+  installBaselineTypesSystem();
   const ironBatch = createMaterial('Pure Iron Harvest'); ironBatch.addSubstance(iron, 1000); ironBatch.addJunk(junk, 200);
   const goldOre = createMaterial('Gold-Rich Ore'); goldOre.addSubstance(iron, 150); goldOre.addSubstance(gold, 20); goldOre.addJunk(junk, 100);
   return state;
@@ -696,11 +976,25 @@ function buildDefaultState() {
 function loadState() {
   if (typeof localStorage === 'undefined') return buildDefaultState();
   const raw = localStorage.getItem(STORAGE_KEY);
-  if (!raw) return buildDefaultState();
-  try {
-    const snapshot = JSON.parse(raw);
-    if (snapshot.version === SNAPSHOT_VERSION) return hydrateState(snapshot);
-  } catch (error) { console.warn('Failed to load crafting state; restoring defaults.', error); }
+  if (raw) {
+    try {
+      const snapshot = JSON.parse(raw);
+      if (snapshot.version === SNAPSHOT_VERSION) return hydrateState(snapshot);
+    } catch (error) { console.warn('Failed to load crafting state; restoring defaults.', error); }
+    return buildDefaultState();
+  }
+  const v4Raw = localStorage.getItem('text-based-mmo-crafting-system-v4');
+  if (v4Raw) {
+    try {
+      const snapshot = JSON.parse(v4Raw);
+      if (snapshot.version === 4) {
+        hydrateState(migrateV4Snapshot(snapshot));
+        installBaselineTypesSystem();
+        persistState();
+        return state;
+      }
+    } catch (error) { console.warn('Failed to migrate crafting state; restoring defaults.', error); }
+  }
   return buildDefaultState();
 }
 
